@@ -1,21 +1,24 @@
+// ==============================================================================
+// CONFIGURACIÓN DEL COMPILADOR DE TYPESCRIPT (tsconfig.json)
+// Proyecto: VoicePilot AI - Backend Engine
+// ==============================================================================
 {
   "compilerOptions": {
     /* Opciones Principales de Compilación */
     "target": "ES2022",                  /* Versión moderna de JavaScript de salida */
     "module": "commonjs",                /* Sistema de módulos compatible con Node.js */
-    "moduleResolution": "node",          /* Estrategia de resolución de paquetes */
-    "rootDir": "./src",                  /* Ubicación de nuestro código fuente en TypeScript */
-    "outDir": "./dist",                  /* Ubicación donde se guardará el JavaScript compilado */
+    "rootDir": "./src",                  /* Carpeta raíz donde reside nuestro código TypeScript */
+    "outDir": "./dist",                  /* Carpeta donde se generará el código compilado para producción */
 
-    /* Reglas Estrictas de Calidad (Nivel Senior) */
-    "strict": true,                      /* Activa la verificación estricta de tipos */
-    "noImplicitAny": true,               /* Prohíbe el uso implícito del tipo 'any' */
-    "strictNullChecks": true,            /* Evita errores de variables nulas o no definidas */
+    /* Reglas Estrictas de Calidad y Tipado (Nivel Senior) */
+    "strict": true,                      /* Activa todas las verificaciones estrictas de tipos */
+    "noImplicitAny": true,               /* Prohíbe el uso de variables sin tipo definido ('any') */
+    "strictNullChecks": true,            /* Evita errores en tiempo de ejecución por valores null/undefined */
 
-    /* Compatibilidad y Optimización */
-    "esModuleInterop": true,             /* Permite importar bibliotecas CommonJS con sintaxis ES6 */
-    "skipLibCheck": true,                /* Omite verificación de tipos en librerías externas para acelerar */
-    "forceConsistentCasingInFileNames": true /* Obliga a mantener coherencia de mayúsculas/minúsculas en archivos */
+    /* Compatibilidad e Infraestructura */
+    "esModuleInterop": true,             /* Permite importar módulos CommonJS usando la sintaxis moderna ES6 */
+    "skipLibCheck": true,                /* Omite la verificación de tipos en librerías externas para compilar rápido */
+    "forceConsistentCasingInFileNames": true /* Garantiza la coincidencia exacta de mayúsculas/minúsculas en archivos */
   },
-  "include": ["src/**/*"]                 /* Indica a TypeScript que analice todo lo dentro de la carpeta 'src' */
+  "include": ["src/**/*"]                 /* Le indica a TypeScript que escanee toda la carpeta 'src' */
 }
