@@ -12,6 +12,7 @@ import { testRedisConnection } from './config/redis';
 // IMPORTACIÓN DE RUTAS
 import tenantRoutes from './routes/tenant.routes';
 import assistantRoutes from './routes/assistant.routes'; // <-- NUEVA RUTA
+import callRoutes from './routes/call.routes'; // <-- IMPORTAR RUTAS DE LLAMADAS
 
 dotenv.config();
 
@@ -26,6 +27,7 @@ app.use(express.json());
  */
 app.use('/api/tenants', tenantRoutes);
 app.use('/api/assistants', assistantRoutes); // <-- NUEVO ENDPOINT ACTIVADO
+app.use('/api/calls', callRoutes); // <-- ACTIVAR ENDPOINT DE LLAMADAS
 
 app.get('/health', (req: Request, res: Response) => {
   res.status(200).json({
@@ -39,6 +41,7 @@ async function bootstrap(): Promise<void> {
   console.log('==================================================');
   console.log('🚀 Iniciando VoicePilot AI Engine...');
   console.log('==================================================');
+  console.log(`📞 API Call Logs disponible en: http://localhost:${PORT}/api/calls`);
 
   await testDbConnection();
   await testRedisConnection();
