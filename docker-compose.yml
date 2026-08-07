@@ -1,48 +1,54 @@
-version: '3.8'
+# ==============================================================================
+# ARCHIVO DE INFRAESTRUCTURA: Docker Compose
+# Proyecto: VoicePilot AI (Arquitectura de Marca Blanca / Multiempresa)
+# Descripción: Define y levanta los servicios base (Base de Datos y Caché)
+# ==============================================================================
 
-# Definimos los "servicios" (contenedores/máquinas) que necesita nuestro proyecto
 services:
 
-  # 1. SERVICIO DE BASE DE DATOS
+  # 1. SERVICIO DE BASE DE RELACIONAL (PostgreSQL)
+  # Almacenará la información estructurada: usuarios, clientes, configuraciones de negocio, etc.
   postgres:
-    # Usamos la imagen oficial de PostgreSQL versión 15 basada en Alpine (muy ligera)
     image: postgres:15-alpine
     container_name: alpha_database
-    # Reinicia automáticamente el contenedor si hay un fallo
-    restart: unless-stopped
-    # Lee las credenciales de nuestro archivo .env para crear la base de datos
+    restart: unless-stopped # Se reinicia automáticamente si el sistema o Docker se apagan
     environment:
+      # Lee las variables dinámicas desde nuestro archivo .env (con valores por defecto si no existen)
       POSTGRES_DB: ${DB_DATABASE:-voicepilot_db}
       POSTGRES_USER: ${DB_USERNAME:-admin}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-secret_password}
-    # Mapea el puerto 5432 de la máquina virtual al puerto 5432 de tu ordenador
     ports:
-      - "5432:5432"
-    # Guarda los datos en un "volumen" físico para que no se borren si el contenedor se apaga
+      - "5432:5432" # Expone el puerto estándar de PostgreSQL hacia tu máquina local
     volumes:
-      - alpha_db_data:/var/lib/postgresql/data
+      - alpha_db_data:/var/lib/postgresql/data # Persistencia: los datos no se borran al apagar el contenedor
     networks:
       - alpha_network
 
-  # 2. SERVICIO DE CACHÉ (REDIS)
+  # 2. SERVICIO DE CACHÉ Y MEMORIA EN TIEMPO REAL (Redis)
+  # Vital para almacenar el contexto ultrarrápido de las llamadas telefónicas y evitar latencia
   redis:
-    # Imagen oficial de Redis basada en Alpine
     image: redis:7-alpine
     container_name: alpha_cache
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "6379:6379" # Expone el puerto estándar de Redis
     volumes:
-      - alpha_redis_data:/data
+      - alpha_redis_data:/data # Persistencia para los datos en memoria si es necesario
     networks:
       - alpha_network
 
-# Declaramos los volúmenes físicos donde se guardará la información persistente
+# ==============================================================================
+# VOLÚMENES PERSISTENTES
+# Espacios reservados en el disco de tu computadora para guardar la información
+# ==============================================================================
 volumes:
   alpha_db_data:
   alpha_redis_data:
 
-# Creamos una red privada para que la base de datos y la caché puedan comunicarse de forma segura
+# ==============================================================================
+# RED PRIVADA VIRTUAL
+# Permite que la base de datos y la caché se comuniquen entre sí de forma segura
+# ==============================================================================
 networks:
   alpha_network:
     driver: bridge
