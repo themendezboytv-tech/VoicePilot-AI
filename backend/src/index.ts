@@ -1,7 +1,6 @@
 // ==============================================================================
 // ARCHIVO DE ENTRADA PRINCIPAL: Backend Engine
 // Proyecto: VoicePilot AI
-// Descripción: Servidor Express con verificación de bases de datos en tiempo real.
 // ==============================================================================
 
 import express, { Request, Response } from 'express';
@@ -10,21 +9,24 @@ import dotenv from 'dotenv';
 import { testDbConnection } from './config/database';
 import { testRedisConnection } from './config/redis';
 
-// Cargar variables de entorno desde el archivo .env
+// IMPORTACIÓN DE RUTAS
+import tenantRoutes from './routes/tenant.routes';
+import assistantRoutes from './routes/assistant.routes'; // <-- NUEVA RUTA
+
 dotenv.config();
 
-// Inicialización de la aplicación Express
 const app = express();
 const PORT: number = Number(process.env.PORT) || 3000;
 
-// Middlewares globales
-app.use(cors()); // Habilita peticiones cruzadas desde el frontend
-app.use(express.json()); // Permite al servidor procesar JSON en las peticiones
+app.use(cors());
+app.use(express.json());
 
 /**
- * Ruta de Salud (Health Check)
- * Útil para monitorear el estado del servidor
+ * Rutas de la API REST
  */
+app.use('/api/tenants', tenantRoutes);
+app.use('/api/assistants', assistantRoutes); // <-- NUEVO ENDPOINT ACTIVADO
+
 app.get('/health', (req: Request, res: Response) => {
   res.status(200).json({
     status: 'online',
@@ -33,26 +35,22 @@ app.get('/health', (req: Request, res: Response) => {
   });
 });
 
-/**
- * Función de arranque del servidor y verificación de servicios
- */
 async function bootstrap(): Promise<void> {
   console.log('==================================================');
   console.log('🚀 Iniciando VoicePilot AI Engine...');
   console.log('==================================================');
 
-  // Probar conexiones a la infraestructura Docker
   await testDbConnection();
   await testRedisConnection();
 
-  // Iniciar la escucha de peticiones HTTP
   app.listen(PORT, () => {
     console.log('==================================================');
     console.log(`📡 Servidor HTTP corriendo en: http://localhost:${PORT}`);
     console.log(`🏥 Endpoint de salud disponible en: http://localhost:${PORT}/health`);
+    console.log(`🏢 API Tenants disponible en: http://localhost:${PORT}/api/tenants`);
+    console.log(`🤖 API Assistants disponible en: http://localhost:${PORT}/api/assistants`);
     console.log('==================================================\n');
   });
 }
 
-// Ejecutar proceso de inicio
 bootstrap();
