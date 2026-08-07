@@ -13,6 +13,7 @@ import { testRedisConnection } from './config/redis';
 import tenantRoutes from './routes/tenant.routes';
 import assistantRoutes from './routes/assistant.routes'; // <-- NUEVA RUTA
 import callRoutes from './routes/call.routes'; // <-- IMPORTAR RUTAS DE LLAMADAS
+import aiRoutes from './routes/ai.routes'; // <-- NUEVA RUTA DE IA
 
 dotenv.config();
 
@@ -28,6 +29,7 @@ app.use(express.json());
 app.use('/api/tenants', tenantRoutes);
 app.use('/api/assistants', assistantRoutes); // <-- NUEVO ENDPOINT ACTIVADO
 app.use('/api/calls', callRoutes); // <-- ACTIVAR ENDPOINT DE LLAMADAS
+app.use('/api/ai', aiRoutes); // <-- NUEVO ENDPOINT DE INTELIGENCIA ARTIFICIAL
 
 app.get('/health', (req: Request, res: Response) => {
   res.status(200).json({
