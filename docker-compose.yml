@@ -1,0 +1,48 @@
+version: '3.8'
+
+# Definimos los "servicios" (contenedores/máquinas) que necesita nuestro proyecto
+services:
+
+  # 1. SERVICIO DE BASE DE DATOS
+  postgres:
+    # Usamos la imagen oficial de PostgreSQL versión 15 basada en Alpine (muy ligera)
+    image: postgres:15-alpine
+    container_name: alpha_database
+    # Reinicia automáticamente el contenedor si hay un fallo
+    restart: unless-stopped
+    # Lee las credenciales de nuestro archivo .env para crear la base de datos
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-voicepilot_db}
+      POSTGRES_USER: ${DB_USERNAME:-admin}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret_password}
+    # Mapea el puerto 5432 de la máquina virtual al puerto 5432 de tu ordenador
+    ports:
+      - "5432:5432"
+    # Guarda los datos en un "volumen" físico para que no se borren si el contenedor se apaga
+    volumes:
+      - alpha_db_data:/var/lib/postgresql/data
+    networks:
+      - alpha_network
+
+  # 2. SERVICIO DE CACHÉ (REDIS)
+  redis:
+    # Imagen oficial de Redis basada en Alpine
+    image: redis:7-alpine
+    container_name: alpha_cache
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - alpha_redis_data:/data
+    networks:
+      - alpha_network
+
+# Declaramos los volúmenes físicos donde se guardará la información persistente
+volumes:
+  alpha_db_data:
+  alpha_redis_data:
+
+# Creamos una red privada para que la base de datos y la caché puedan comunicarse de forma segura
+networks:
+  alpha_network:
+    driver: bridge
