@@ -1,5 +1,5 @@
 // ==============================================================================
-// SERVICIO: Gemini AI Engine (Con SDK Clásico Estable)
+// SERVICIO: Gemini AI Engine (Auto-Fallback de Modelos)
 // Proyecto: VoicePilot AI
 // ==============================================================================
 
@@ -11,29 +11,46 @@ dotenv.config();
 const apiKey = process.env.GEMINI_API_KEY || '';
 
 if (!apiKey) {
-  console.warn('⚠️ ADVERTENCIA: GEMINI_API_KEY no está configurada en las variables de entorno.');
+  console.warn('⚠️ ADVERTENCIA: GEMINI_API_KEY no está configurada en .env');
 }
 
-// Inicializar con la librería clásica y estable
 const genAI = new GoogleGenerativeAI(apiKey);
 
+// Lista optimizada sin modelos obsoletos (2.5) para evitar peticiones 404 innecesarias
+const MODELOS_CANDIDATOS = [
+  'gemini-3.1-flash-lite',
+  'gemini-3.5-flash',
+  'gemini-flash-latest',
+  'gemini-3.1-pro-preview'
+];
 export const generateAssistantResponse = async (
-  systemPrompt: string,
-  userMessage: string
+  systemPrompt: string = '',
+  userMessage: string = ''
 ): Promise<string> => {
-  try {
-    // Usamos el modelo estándar gemini-1.5-flash con systemInstruction nativo
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-1.5-flash',
-      systemInstruction: systemPrompt
-    });
+  const safeSystem = systemPrompt || 'Eres un asistente virtual atento y profesional.';
+  const safeUser = userMessage || 'Hola';
+  const promptCompleto = `[Instrucciones del Sistema]:\n${safeSystem}\n\n[Mensaje del Cliente]:\n${safeUser}`;
 
-    const result = await model.generateContent(userMessage);
-    const response = await result.response;
-    
-    return response.text() || 'Lo siento, no he podido procesar una respuesta en este momento.';
-  } catch (error: any) {
-    console.error('❌ Error al conectar con la API de Gemini:', error);
-    throw new Error(`Fallo crítico en el motor de Inteligencia Artificial: ${error.message || error}`);
+  let ultimoError: any = null;
+
+  for (const modelName of MODELOS_CANDIDATOS) {
+    try {
+      console.log(`🤖 Probando generación con modelo: ${modelName}...`);
+      const model = genAI.getGenerativeModel({ model: modelName });
+      const result = await model.generateContent(promptCompleto);
+      const response = await result.response;
+      const text = response.text();
+
+      if (text) {
+        console.log(`✅ ¡Éxito! Modelo funcional confirmado: ${modelName}`);
+        return text;
+      }
+    } catch (error: any) {
+      console.warn(`⚠️ Modelo ${modelName} no aceptó la petición: ${error.message || error}`);
+      ultimoError = error;
+    }
   }
+
+  console.error('❌ Todos los modelos candidatos fallaron. Último error:', ultimoError);
+  throw new Error(`Fallo en el motor de IA: ${ultimoError?.message || ultimoError}`);
 };
