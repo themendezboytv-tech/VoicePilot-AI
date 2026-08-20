@@ -8,12 +8,13 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { testDbConnection } from './config/database';
 import { testRedisConnection } from './config/redis';
+import { runMigrations } from './database/migrator'; // <-- 1. IMPORTACIÓN DEL MIGRADOR
 
 // IMPORTACIÓN DE RUTAS
 import tenantRoutes from './routes/tenant.routes';
-import assistantRoutes from './routes/assistant.routes'; // <-- NUEVA RUTA
-import callRoutes from './routes/call.routes'; // <-- IMPORTAR RUTAS DE LLAMADAS
-import aiRoutes from './routes/ai.routes'; // <-- NUEVA RUTA DE IA
+import assistantRoutes from './routes/assistant.routes';
+import callRoutes from './routes/call.routes';
+import aiRoutes from './routes/ai.routes';
 
 dotenv.config();
 
@@ -27,9 +28,9 @@ app.use(express.json());
  * Rutas de la API REST
  */
 app.use('/api/tenants', tenantRoutes);
-app.use('/api/assistants', assistantRoutes); // <-- NUEVO ENDPOINT ACTIVADO
-app.use('/api/calls', callRoutes); // <-- ACTIVAR ENDPOINT DE LLAMADAS
-app.use('/api/ai', aiRoutes); // <-- NUEVO ENDPOINT DE INTELIGENCIA ARTIFICIAL
+app.use('/api/assistants', assistantRoutes);
+app.use('/api/calls', callRoutes);
+app.use('/api/ai', aiRoutes);
 
 app.get('/health', (req: Request, res: Response) => {
   res.status(200).json({
@@ -45,9 +46,14 @@ async function bootstrap(): Promise<void> {
   console.log('==================================================');
   console.log(`📞 API Call Logs disponible en: http://localhost:${PORT}/api/calls`);
 
+  // 1. Probar conexiones
   await testDbConnection();
   await testRedisConnection();
 
+  // 2. Ejecutar migraciones automáticas
+  await runMigrations(); // <-- 2. EJECUCIÓN ANTES DE ABRIR EL PUERTO
+
+  // 3. Levantar el servidor
   app.listen(PORT, () => {
     console.log('==================================================');
     console.log(`📡 Servidor HTTP corriendo en: http://localhost:${PORT}`);
