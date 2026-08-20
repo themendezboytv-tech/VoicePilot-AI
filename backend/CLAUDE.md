@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 🎯 Norte del proyecto (no perder de vista)
+
+VoicePilot AI existe para generar ingresos reales como SaaS multi-tenant vendiendo recepcionistas de IA por voz a negocios. Cualquier decisión técnica debe evaluarse contra esto: ¿esto acerca el producto a tener un cliente real pagando, o es complejidad/pulido que puede esperar? Ante la duda entre "hacerlo bien de una vez" y "lo mínimo que funciona y se puede vender", prioriza lo segundo, salvo que el usuario diga explícitamente lo contrario.
+
+Para tareas grandes o ambiguas, releer esta sección antes de proponer un plan.
+
 ## What this is
 
 VoicePilot AI backend: a multi-tenant SaaS engine that will let businesses run an AI-powered voice receptionist. Each Tenant configures its own Assistant (system prompt, greeting, phone number) without touching code. Node.js + Express + TypeScript, PostgreSQL for persistence, Redis for short-term conversation memory.
