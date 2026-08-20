@@ -1,25 +1,23 @@
 // ==============================================================================
-// CONTROLADOR: AI Bot Interaction
+// CONTROLADOR: AI Bot Interaction (Con Memoria Redis y Persistencia DB)
 // Proyecto: VoicePilot AI
 // ==============================================================================
 
 import { Request, Response } from 'express';
 import { generateAssistantResponse } from '../services/gemini.service';
-import { dbPool } from '../config/database'; // 👈 Importamos dbPool correctamente
+import { dbPool } from '../config/database';
+import { getChatHistory, saveChatHistory } from '../services/memory.service'; // 👈 Importamos la memoria
 
 export const handleAIBotInteraction = async (req: Request, res: Response) => {
   try {
     const { assistant_id, message, caller_number = '+34600000000' } = req.body;
 
-    // Validación de entrada
     if (!assistant_id || !message) {
-      return res.status(400).json({ 
-        error: 'Los parámetros assistant_id y message son obligatorios.' 
-      });
+      return res.status(400).json({ error: 'Los parámetros assistant_id y message son obligatorios.' });
     }
 
-    // 1. Obtener la información del asistente y tenant desde PostgreSQL
-    const assistantResult = await dbPool.query( // 👈 Usamos dbPool
+    // 1. Obtener datos del asistente
+    const assistantResult = await dbPool.query(
       'SELECT id, tenant_id, name, system_prompt FROM assistants WHERE id = $1',
       [assistant_id]
     );
@@ -30,20 +28,34 @@ export const handleAIBotInteraction = async (req: Request, res: Response) => {
 
     const assistant = assistantResult.rows[0];
 
-    // 2. Generar la respuesta contextual con el motor Gemini
-    const aiResponse = await generateAssistantResponse(assistant.system_prompt, message);
+    // --- 🧠 2. RECUPERAR MEMORIA DE REDIS ---
+    // Usamos el número de teléfono y el ID del asistente como clave única de sesión
+    const sessionId = `${assistant_id}:${caller_number}`;
+    const previousHistory = await getChatHistory(sessionId);
 
-    // 3. Formatear la transcripción según el formato de la base de datos
+    // Inyectamos el historial al mensaje actual si existe
+    let contextMessage = message;
+    if (previousHistory) {
+      contextMessage = `Este es el historial reciente de la conversación:\n${previousHistory}\n--- FIN DEL HISTORIAL ---\n\nResponde a este nuevo mensaje del cliente siguiendo el hilo de la conversación: "${message}"`;
+    }
+
+    // --- 🤖 3. GENERAR RESPUESTA CON GEMINI ---
+    // Le pasamos a Gemini el mensaje modificado con todo el contexto
+    const aiResponse = await generateAssistantResponse(assistant.system_prompt, contextMessage);
+
+    // --- 💾 4. GUARDAR NUEVO CONTEXTO EN REDIS ---
+    await saveChatHistory(sessionId, message, aiResponse);
+
+    // --- 🗄️ 5. GUARDAR LLAMADA EN POSTGRESQL ---
     const transcript = `Cliente: ${message} - Asistente: ${aiResponse}`;
-
-    // 4. Guardar la llamada/interacción en la tabla calls
+    
     const insertQuery = `
       INSERT INTO calls (tenant_id, assistant_id, caller_number, duration_seconds, status, transcript)
       VALUES ($1, $2, $3, $4, $5, $6)
       RETURNING id, created_at;
     `;
 
-    const newCall = await dbPool.query(insertQuery, [ // 👈 Usamos dbPool
+    const newCall = await dbPool.query(insertQuery, [
       assistant.tenant_id,
       assistant.id,
       caller_number,
@@ -52,7 +64,7 @@ export const handleAIBotInteraction = async (req: Request, res: Response) => {
       transcript
     ]);
 
-    // 5. Responder al cliente con confirmación e ID de registro
+    // 6. Responder al cliente
     return res.status(200).json({
       success: true,
       call_id: newCall.rows[0].id,
@@ -64,9 +76,6 @@ export const handleAIBotInteraction = async (req: Request, res: Response) => {
 
   } catch (error: any) {
     console.error('❌ Error en controlador de IA:', error);
-    return res.status(500).json({ 
-      error: 'Error interno al procesar la inteligencia artificial.',
-      details: error.message 
-    });
+    return res.status(500).json({ error: 'Error interno al procesar la inteligencia artificial.' });
   }
 };
