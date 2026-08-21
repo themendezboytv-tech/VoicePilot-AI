@@ -23,6 +23,8 @@ export async function runMigrations(): Promise<void> {
         greeting_message TEXT,
         voice_id VARCHAR(100) DEFAULT 'default',
         phone_number VARCHAR(50),
+        ai_provider VARCHAR(50) DEFAULT 'gemini',
+        telephony_provider VARCHAR(50) DEFAULT 'twilio',
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -47,6 +49,8 @@ export async function runMigrations(): Promise<void> {
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS greeting_message TEXT;
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS voice_id VARCHAR(100) DEFAULT 'default';
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS phone_number VARCHAR(50);
+    ALTER TABLE assistants ADD COLUMN IF NOT EXISTS ai_provider VARCHAR(50) DEFAULT 'gemini';
+    ALTER TABLE assistants ADD COLUMN IF NOT EXISTS telephony_provider VARCHAR(50) DEFAULT 'twilio';
     ALTER TABLE calls ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE;
     ALTER TABLE calls ADD COLUMN IF NOT EXISTS caller_number VARCHAR(50);
     ALTER TABLE calls ADD COLUMN IF NOT EXISTS duration_seconds INT DEFAULT 0;

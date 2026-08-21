@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS assistants (
     greeting_message TEXT,
     voice_id VARCHAR(100) DEFAULT 'default',
     phone_number VARCHAR(50),
+    ai_provider VARCHAR(50) DEFAULT 'gemini',
+    telephony_provider VARCHAR(50) DEFAULT 'twilio',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 

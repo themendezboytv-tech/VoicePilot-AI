@@ -13,22 +13,31 @@ import { dbPool } from '../config/database';
  */
 export const createAssistant = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { tenant_id, name, system_prompt, greeting_message, voice_id, phone_number } = req.body;
+    const { tenant_id, name, system_prompt, greeting_message, voice_id, phone_number, ai_provider, telephony_provider } = req.body;
 
     // Validación básica: Necesitamos saber a qué empresa pertenece y sus instrucciones
     if (!tenant_id || !name || !system_prompt || !greeting_message) {
-      res.status(400).json({ 
-        error: 'Faltan campos obligatorios (tenant_id, name, system_prompt, greeting_message)' 
+      res.status(400).json({
+        error: 'Faltan campos obligatorios (tenant_id, name, system_prompt, greeting_message)'
       });
       return;
     }
 
     // Insertar en PostgreSQL y devolver el registro creado
     const result = await dbPool.query(
-      `INSERT INTO assistants (tenant_id, name, system_prompt, greeting_message, voice_id, phone_number) 
-       VALUES ($1, $2, $3, $4, $5, $6) 
+      `INSERT INTO assistants (tenant_id, name, system_prompt, greeting_message, voice_id, phone_number, ai_provider, telephony_provider)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
-      [tenant_id, name, system_prompt, greeting_message, voice_id || 'default', phone_number || null]
+      [
+        tenant_id,
+        name,
+        system_prompt,
+        greeting_message,
+        voice_id || 'default',
+        phone_number || null,
+        ai_provider || 'gemini',
+        telephony_provider || 'twilio'
+      ]
     );
 
     res.status(201).json({

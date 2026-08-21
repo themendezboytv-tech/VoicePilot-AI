@@ -15,6 +15,7 @@ import tenantRoutes from './routes/tenant.routes';
 import assistantRoutes from './routes/assistant.routes';
 import callRoutes from './routes/call.routes';
 import aiRoutes from './routes/ai.routes';
+import telephonyRoutes from './routes/telephony.routes';
 
 dotenv.config();
 
@@ -23,6 +24,9 @@ const PORT: number = Number(process.env.PORT) || 3000;
 
 app.use(cors());
 app.use(express.json());
+// Twilio (y la mayoría de proveedores de telefonía) envían sus webhooks
+// como application/x-www-form-urlencoded, no JSON.
+app.use(express.urlencoded({ extended: false }));
 
 /**
  * Rutas de la API REST
@@ -31,6 +35,7 @@ app.use('/api/tenants', tenantRoutes);
 app.use('/api/assistants', assistantRoutes);
 app.use('/api/calls', callRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/telephony', telephonyRoutes);
 
 app.get('/health', (req: Request, res: Response) => {
   res.status(200).json({
