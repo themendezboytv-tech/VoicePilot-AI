@@ -4,7 +4,7 @@
 // ==============================================================================
 
 import { Request, Response } from 'express';
-import { generateAssistantResponse } from '../services/gemini.service';
+import { getAIProvider } from '../providers/ai';
 import { dbPool } from '../config/database';
 import { getChatHistory, saveChatHistory } from '../services/memory.service'; // 👈 Importamos la memoria
 
@@ -18,7 +18,7 @@ export const handleAIBotInteraction = async (req: Request, res: Response) => {
 
     // 1. Obtener datos del asistente
     const assistantResult = await dbPool.query(
-      'SELECT id, tenant_id, name, system_prompt FROM assistants WHERE id = $1',
+      'SELECT id, tenant_id, name, system_prompt, ai_provider FROM assistants WHERE id = $1',
       [assistant_id]
     );
 
@@ -39,9 +39,10 @@ export const handleAIBotInteraction = async (req: Request, res: Response) => {
       contextMessage = `Este es el historial reciente de la conversación:\n${previousHistory}\n--- FIN DEL HISTORIAL ---\n\nResponde a este nuevo mensaje del cliente siguiendo el hilo de la conversación: "${message}"`;
     }
 
-    // --- 🤖 3. GENERAR RESPUESTA CON GEMINI ---
-    // Le pasamos a Gemini el mensaje modificado con todo el contexto
-    const aiResponse = await generateAssistantResponse(assistant.system_prompt, contextMessage);
+    // --- 🤖 3. GENERAR RESPUESTA CON EL PROVIDER DE IA CONFIGURADO ---
+    // Cada asistente elige su motor (Gemini, OpenAI, ...) vía assistant.ai_provider
+    const aiProvider = getAIProvider(assistant.ai_provider);
+    const aiResponse = await aiProvider.generateResponse(assistant.system_prompt, contextMessage);
 
     // --- 💾 4. GUARDAR NUEVO CONTEXTO EN REDIS ---
     await saveChatHistory(sessionId, message, aiResponse);
