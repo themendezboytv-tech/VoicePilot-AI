@@ -23,7 +23,6 @@
     "ioredis": "^5.4.2",
     "openai": "^6.49.0",
     "pg": "^8.13.1",
-    "redis": "^6.2.1",
     "twilio": "^6.1.0"
   },
   "devDependencies": {

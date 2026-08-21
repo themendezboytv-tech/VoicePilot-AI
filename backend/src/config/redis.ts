@@ -19,6 +19,14 @@ export const redisClient = new Redis({
   lazyConnect: true, // Conecta de forma explícita al invocar .connect()
 });
 
+// Sin este listener, un evento 'error' de ioredis (ej. Redis se cae o se
+// reinicia) se propaga como excepción no capturada y tumba el proceso
+// entero. Lo logueamos y dejamos que la reconexión automática de ioredis
+// haga su trabajo.
+redisClient.on('error', (error) => {
+  console.error('❌ [Redis] Error en la conexión:', error.message || error);
+});
+
 /**
  * Función para probar la conexión activa con Redis
  */

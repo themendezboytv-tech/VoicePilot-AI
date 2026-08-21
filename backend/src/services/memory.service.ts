@@ -4,22 +4,7 @@
 // Descripción: Gestiona el historial reciente de chat para mantener el contexto.
 // ==============================================================================
 
-import { createClient } from 'redis';
-import dotenv from 'dotenv';
-
-dotenv.config();
-
-// Creamos un cliente Redis. (Si ya tienes uno en config, esto crea una conexión dedicada a la memoria)
-const redisClient = createClient({
-  url: process.env.REDIS_URL || 'redis://localhost:6379'
-});
-
-redisClient.on('error', (err) => console.error('❌ Error en el cliente Redis (Memoria):', err));
-
-// Auto-conectar
-if (!redisClient.isOpen) {
-  redisClient.connect().catch(console.error);
-}
+import { redisClient } from '../config/redis';
 
 const HISTORY_TTL = 3600; // El bot recordará la conversación durante 1 hora (en segundos)
 
@@ -42,18 +27,18 @@ export const getChatHistory = async (sessionId: string): Promise<string> => {
 export const saveChatHistory = async (sessionId: string, userMsg: string, aiMsg: string): Promise<void> => {
   try {
     const currentHistory = await getChatHistory(sessionId);
-    
+
     // Agregamos el nuevo intercambio
     const newEntry = `Cliente: ${userMsg}\nAsistente: ${aiMsg}\n\n`;
     let updatedHistory = currentHistory + newEntry;
-    
+
     // Límite de seguridad: Guardamos solo los últimos ~2000 caracteres para no saturar los tokens de Gemini
     if (updatedHistory.length > 2000) {
       updatedHistory = updatedHistory.substring(updatedHistory.length - 2000);
     }
 
     // Guardamos en Redis con tiempo de expiración (TTL)
-    await redisClient.setEx(`chat_history:${sessionId}`, HISTORY_TTL, updatedHistory);
+    await redisClient.setex(`chat_history:${sessionId}`, HISTORY_TTL, updatedHistory);
   } catch (error) {
     console.error('❌ Error guardando historial en Redis:', error);
   }
