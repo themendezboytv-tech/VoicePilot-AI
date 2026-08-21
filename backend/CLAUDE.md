@@ -22,7 +22,9 @@ Run from `backend/`:
 - `npm run build` — compile TypeScript to `dist/` (`tsc`)
 - `npm start` — run the compiled build (`node dist/index.js`)
 
-There is no lint script and no test suite configured in this repo.
+There is no lint script and no automated test framework configured in this repo. There is one manual/scripted end-to-end check:
+
+- `npm run test:e2e:ai-chat` — spins up disposable Postgres+Redis containers via `docker-compose.test.yml` (`voicepilot_test_db`/`voicepilot_test_cache`, ports `5433`/`6380` — separate from `alpha_database`/`alpha_cache`, never touches them), runs `runMigrations()` against that throwaway DB, seeds a test tenant/assistant, spins up a minimal Express app with only `/api/ai` mounted, and drives real HTTP requests at it (missing-fields → `400`, unknown assistant → `404`, a real round trip that calls Gemini for real and checks the response, the `calls` row, and the Redis session history across two messages). See `scripts/e2e-ai-chat.ts`. It overrides `DB_*`/`REDIS_*` env vars in-process before importing anything that reads them, specifically so it can never end up pointed at production. Leaves the test containers running for reuse; `npm run test:e2e:down` tears them down.
 
 Production deploy (documented in the root `README.md`): `git pull` → `npm install` → `npm run build` → `pm2 restart voicepilot-backend`. The app is run under PM2 as `voicepilot-backend`, with PostgreSQL and Redis in Docker containers named `alpha_database` and `alpha_cache` (see root `docker-compose.yml`).
 
