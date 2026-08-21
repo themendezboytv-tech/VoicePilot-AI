@@ -22,6 +22,11 @@ dotenv.config();
 const app = express();
 const PORT: number = Number(process.env.PORT) || 3000;
 
+// En producción corre detrás de un proxy TLS; sin esto req.protocol
+// siempre da 'http' y la validación de X-Twilio-Signature (que firma la
+// URL completa, incluyendo el esquema) fallaría siempre.
+app.set('trust proxy', true);
+
 app.use(cors());
 app.use(express.json());
 // Twilio (y la mayoría de proveedores de telefonía) envían sus webhooks

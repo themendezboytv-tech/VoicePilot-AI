@@ -7,18 +7,44 @@
 // ==============================================================================
 
 import { Request, Response } from 'express';
+import { validateRequest } from 'twilio';
 import { dbPool } from '../config/database';
 import { getTelephonyProvider } from '../providers/telephony';
 import { getAIProvider } from '../providers/ai';
 import { getChatHistory, saveChatHistory } from '../services/memory.service';
 
-// Único proveedor de telefonía real implementado hasta ahora.
-// Cuando exista más de uno, esto debería resolverse por Tenant/Assistant
-// igual que ai_provider, en vez de estar fijo por endpoint.
-const PROVIDER_NAME = 'twilio';
+// Estas dos rutas están registradas específicamente como el webhook de
+// Twilio (/api/telephony/twilio/*), así que antes de conocer el asistente
+// (y por lo tanto su telephony_provider) solo tiene sentido interpretar el
+// payload como Twilio. Una vez cargado el asistente, se resuelve el
+// provider real vía assistant.telephony_provider.
+const FALLBACK_PROVIDER_NAME = 'twilio';
+
+const TWILIO_AUTH_TOKEN = process.env.TELEPHONY_AUTH_TOKEN || '';
 
 function buildBaseUrl(req: Request): string {
   return `${req.protocol}://${req.get('host')}`;
+}
+
+/**
+ * Verifica la cabecera X-Twilio-Signature contra el auth token de la
+ * cuenta, para asegurar que el webhook viene realmente de Twilio y no de
+ * cualquiera que descubra la URL. Rechaza por defecto si no hay auth token
+ * configurado (nunca hay que aceptar peticiones sin poder validarlas).
+ */
+function isValidTwilioSignature(req: Request): boolean {
+  if (!TWILIO_AUTH_TOKEN) {
+    console.warn('⚠️ TELEPHONY_AUTH_TOKEN no configurado: no se puede validar X-Twilio-Signature.');
+    return false;
+  }
+
+  const signature = req.header('X-Twilio-Signature');
+  if (!signature) {
+    return false;
+  }
+
+  const fullUrl = `${buildBaseUrl(req)}${req.originalUrl}`;
+  return validateRequest(TWILIO_AUTH_TOKEN, signature, fullUrl, req.body);
 }
 
 /**
@@ -27,19 +53,25 @@ function buildBaseUrl(req: Request): string {
  * Método: POST /api/telephony/twilio/voice
  */
 export const handleIncomingCall = async (req: Request, res: Response): Promise<void> => {
-  const provider = getTelephonyProvider(PROVIDER_NAME);
+  if (!isValidTwilioSignature(req)) {
+    console.warn('⚠️ Firma de Twilio inválida o ausente en /voice, petición rechazada.');
+    res.status(403).send('Firma de Twilio inválida.');
+    return;
+  }
+
+  const fallbackProvider = getTelephonyProvider(FALLBACK_PROVIDER_NAME);
 
   try {
-    const call = provider.parseIncomingCall(req.body);
+    const call = fallbackProvider.parseIncomingCall(req.body);
 
     const assistantResult = await dbPool.query(
-      'SELECT id, tenant_id, name, greeting_message FROM assistants WHERE phone_number = $1',
+      'SELECT id, tenant_id, name, greeting_message, telephony_provider FROM assistants WHERE phone_number = $1',
       [call.to]
     );
 
     if (assistantResult.rows.length === 0) {
       console.warn(`⚠️ Llamada entrante a un número sin asistente configurado: ${call.to}`);
-      const response = provider.buildHangupResponse(
+      const response = fallbackProvider.buildHangupResponse(
         'Lo sentimos, este número no tiene un asistente configurado todavía.'
       );
       res.type(response.contentType).send(response.body);
@@ -47,6 +79,7 @@ export const handleIncomingCall = async (req: Request, res: Response): Promise<v
     }
 
     const assistant = assistantResult.rows[0];
+    const provider = getTelephonyProvider(assistant.telephony_provider);
     const gatherActionUrl = `${buildBaseUrl(req)}/api/telephony/twilio/gather?assistant_id=${assistant.id}`;
 
     const response = provider.buildGreetingResponse(
@@ -57,7 +90,7 @@ export const handleIncomingCall = async (req: Request, res: Response): Promise<v
     res.type(response.contentType).send(response.body);
   } catch (error: any) {
     console.error('❌ Error en webhook de llamada entrante:', error);
-    const response = provider.buildHangupResponse('Ocurrió un error interno. Por favor, intenta más tarde.');
+    const response = fallbackProvider.buildHangupResponse('Ocurrió un error interno. Por favor, intenta más tarde.');
     res.type(response.contentType).send(response.body);
   }
 };
@@ -68,31 +101,38 @@ export const handleIncomingCall = async (req: Request, res: Response): Promise<v
  * Método: POST /api/telephony/twilio/gather?assistant_id=UUID
  */
 export const handleSpeechResult = async (req: Request, res: Response): Promise<void> => {
-  const provider = getTelephonyProvider(PROVIDER_NAME);
+  if (!isValidTwilioSignature(req)) {
+    console.warn('⚠️ Firma de Twilio inválida o ausente en /gather, petición rechazada.');
+    res.status(403).send('Firma de Twilio inválida.');
+    return;
+  }
+
+  const fallbackProvider = getTelephonyProvider(FALLBACK_PROVIDER_NAME);
   const assistantId = req.query.assistant_id as string;
   const gatherActionUrl = `${buildBaseUrl(req)}/api/telephony/twilio/gather?assistant_id=${assistantId}`;
 
   try {
-    const speech = provider.parseSpeechResult(req.body);
+    const speech = fallbackProvider.parseSpeechResult(req.body);
 
     if (!speech.speechResult) {
-      const response = provider.buildReplyResponse('No te escuché bien, ¿puedes repetirlo?', gatherActionUrl);
+      const response = fallbackProvider.buildReplyResponse('No te escuché bien, ¿puedes repetirlo?', gatherActionUrl);
       res.type(response.contentType).send(response.body);
       return;
     }
 
     const assistantResult = await dbPool.query(
-      'SELECT id, tenant_id, name, system_prompt, ai_provider FROM assistants WHERE id = $1',
+      'SELECT id, tenant_id, name, system_prompt, ai_provider, telephony_provider FROM assistants WHERE id = $1',
       [assistantId]
     );
 
     if (assistantResult.rows.length === 0) {
-      const response = provider.buildHangupResponse('Ocurrió un error interno. Por favor, intenta más tarde.');
+      const response = fallbackProvider.buildHangupResponse('Ocurrió un error interno. Por favor, intenta más tarde.');
       res.type(response.contentType).send(response.body);
       return;
     }
 
     const assistant = assistantResult.rows[0];
+    const provider = getTelephonyProvider(assistant.telephony_provider);
 
     // Misma clave de sesión que usa el canal de texto (/api/ai/chat), así
     // ambos canales comparten el historial reciente de un mismo cliente.
@@ -120,7 +160,7 @@ export const handleSpeechResult = async (req: Request, res: Response): Promise<v
     res.type(response.contentType).send(response.body);
   } catch (error: any) {
     console.error('❌ Error en webhook de resultado de voz:', error);
-    const response = provider.buildHangupResponse('Ocurrió un error interno. Por favor, intenta más tarde.');
+    const response = fallbackProvider.buildHangupResponse('Ocurrió un error interno. Por favor, intenta más tarde.');
     res.type(response.contentType).send(response.body);
   }
 };
