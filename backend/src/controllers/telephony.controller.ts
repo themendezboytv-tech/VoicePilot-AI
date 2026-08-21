@@ -95,7 +95,7 @@ export const handleIncomingCall = async (req: Request, res: Response): Promise<v
 
     res.type(response.contentType).send(response.body);
   } catch (error: any) {
-    console.error('❌ Error en webhook de llamada entrante:', error);
+    console.error(`❌ Error en webhook de llamada entrante [code=${error?.code ?? 'desconocido'}]:`, error);
     const response = fallbackProvider.buildHangupResponse('Ocurrió un error interno. Por favor, intenta más tarde.');
     res.type(response.contentType).send(response.body);
   }
@@ -165,7 +165,7 @@ export const handleSpeechResult = async (req: Request, res: Response): Promise<v
     const response = provider.buildReplyResponse(aiResponse, gatherActionUrl);
     res.type(response.contentType).send(response.body);
   } catch (error: any) {
-    console.error('❌ Error en webhook de resultado de voz:', error);
+    console.error(`❌ Error en webhook de resultado de voz [code=${error?.code ?? 'desconocido'}]:`, error);
     const response = fallbackProvider.buildHangupResponse('Ocurrió un error interno. Por favor, intenta más tarde.');
     res.type(response.contentType).send(response.body);
   }

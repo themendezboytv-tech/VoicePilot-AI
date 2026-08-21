@@ -7,6 +7,7 @@ import { Request, Response } from 'express';
 import { getAIProvider } from '../providers/ai';
 import { dbPool } from '../config/database';
 import { getChatHistory, saveChatHistory } from '../services/memory.service'; // 👈 Importamos la memoria
+import { respondToDbError } from '../utils/db-errors';
 
 export const handleAIBotInteraction = async (req: Request, res: Response) => {
   try {
@@ -76,7 +77,14 @@ export const handleAIBotInteraction = async (req: Request, res: Response) => {
     });
 
   } catch (error: any) {
-    console.error('❌ Error en controlador de IA:', error);
-    return res.status(500).json({ error: 'Error interno al procesar la inteligencia artificial.' });
+    // Los providers de IA lanzan Error con este prefijo cuando el motor
+    // externo (Gemini/OpenAI) falla — es un problema del proveedor upstream,
+    // no de nuestra base de datos, así que merece su propio código (502).
+    if (typeof error?.message === 'string' && error.message.startsWith('Fallo en el motor de IA')) {
+      console.error('❌ Error en controlador de IA (proveedor de IA):', error);
+      return res.status(502).json({ error: 'El motor de IA no pudo generar una respuesta. Intenta de nuevo.' });
+    }
+
+    respondToDbError(error, res, 'Error interno al procesar la inteligencia artificial.');
   }
 };
