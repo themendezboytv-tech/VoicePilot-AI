@@ -23,7 +23,13 @@ const FALLBACK_PROVIDER_NAME = 'twilio';
 const TWILIO_AUTH_TOKEN = process.env.TELEPHONY_AUTH_TOKEN || '';
 
 function buildBaseUrl(req: Request): string {
-  return `${req.protocol}://${req.get('host')}`;
+  // req.protocol respeta X-Forwarded-Proto gracias a app.set('trust proxy', true),
+  // pero req.get('host') SIEMPRE lee el header Host crudo (Express no lo hace
+  // proxy-aware). Si el proxy reescribe Host al hostname interno y reenvía el
+  // público en X-Forwarded-Host, hay que preferir ese para que ambas mitades
+  // de la URL reconstruida coincidan con lo que Twilio realmente firmó.
+  const host = req.get('X-Forwarded-Host') || req.get('host');
+  return `${req.protocol}://${host}`;
 }
 
 /**
