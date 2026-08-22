@@ -33,6 +33,7 @@ export async function runMigrations(): Promise<void> {
         tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
         assistant_id UUID REFERENCES assistants(id) ON DELETE SET NULL,
         caller_number VARCHAR(50),
+        call_sid VARCHAR(64),
         duration_seconds INT DEFAULT 0,
         status VARCHAR(50) DEFAULT 'completed',
         transcript TEXT,
@@ -53,9 +54,12 @@ export async function runMigrations(): Promise<void> {
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS telephony_provider VARCHAR(50) DEFAULT 'twilio';
     ALTER TABLE calls ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE;
     ALTER TABLE calls ADD COLUMN IF NOT EXISTS caller_number VARCHAR(50);
+    ALTER TABLE calls ADD COLUMN IF NOT EXISTS call_sid VARCHAR(64);
     ALTER TABLE calls ADD COLUMN IF NOT EXISTS duration_seconds INT DEFAULT 0;
     ALTER TABLE calls ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'completed';
     ALTER TABLE calls ADD COLUMN IF NOT EXISTS transcript TEXT;
+
+    CREATE INDEX IF NOT EXISTS idx_calls_call_sid ON calls(call_sid);
   `;
 
   try {

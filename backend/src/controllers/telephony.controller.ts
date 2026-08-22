@@ -12,6 +12,7 @@ import { dbPool } from '../config/database';
 import { getTelephonyProvider } from '../providers/telephony';
 import { getAIProvider } from '../providers/ai';
 import { getChatHistory, saveChatHistory } from '../services/memory.service';
+import { respondToDbError } from '../utils/db-errors';
 
 // Estas dos rutas están registradas específicamente como el webhook de
 // Twilio (/api/telephony/twilio/*), así que antes de conocer el asistente
@@ -181,9 +182,9 @@ export const handleSpeechResult = async (req: Request, res: Response): Promise<v
 
     const transcript = `Cliente: ${speech.speechResult} - Asistente: ${aiResponse}`;
     await dbPool.query(
-      `INSERT INTO calls (tenant_id, assistant_id, caller_number, duration_seconds, status, transcript)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [assistant.tenant_id, assistant.id, speech.from, 0, 'in-progress', transcript]
+      `INSERT INTO calls (tenant_id, assistant_id, caller_number, call_sid, duration_seconds, status, transcript)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [assistant.tenant_id, assistant.id, speech.from, speech.callSid, 0, 'in-progress', transcript]
     );
 
     const response = provider.buildReplyResponse(aiResponse, gatherActionUrl);
@@ -192,5 +193,55 @@ export const handleSpeechResult = async (req: Request, res: Response): Promise<v
     console.error(`❌ Error en webhook de resultado de voz [code=${error?.code ?? 'desconocido'}]:`, error);
     const response = fallbackProvider.buildHangupResponse('Ocurrió un error interno. Por favor, intenta más tarde.');
     res.type(response.contentType).send(response.body);
+  }
+};
+
+// Estados terminales de una llamada según Twilio. Los intermedios (queued,
+// ringing, in-progress) no cierran nada todavía — solo se acusa recibo.
+const TERMINAL_CALL_STATUSES = new Set(['completed', 'busy', 'failed', 'no-answer', 'canceled']);
+
+/**
+ * Webhook de cambios de estado de la llamada (Call Status Changes). Se
+ * configura a nivel del número de Twilio, no por turno, y dispara una vez
+ * que la llamada termina de verdad. Cierra el status/duration reales de
+ * todas las filas de `calls` que pertenecen a este CallSid — hoy cada
+ * turno conversacional es su propia fila, así que esto actualiza todas
+ * las filas de la llamada al mismo status/duration final en vez de dejarlas
+ * en 'in-progress'/0 para siempre.
+ * A diferencia de /voice y /gather, esta ruta no le da forma al flujo de la
+ * llamada (Twilio no espera TwiML acá), así que responde JSON como el
+ * resto de los controllers, vía respondToDbError.
+ * Método: POST /api/telephony/twilio/status
+ */
+export const handleCallStatus = async (req: Request, res: Response): Promise<void> => {
+  if (!isValidTwilioSignature(req)) {
+    console.warn('⚠️ Firma de Twilio inválida o ausente en /status, petición rechazada.');
+    res.status(403).json({ error: 'Firma de Twilio inválida.' });
+    return;
+  }
+
+  const callSid = req.body.CallSid as string | undefined;
+  const callStatus = req.body.CallStatus as string | undefined;
+  const callDuration = parseInt(req.body.CallDuration as string, 10) || 0;
+
+  if (!callSid || !callStatus) {
+    res.status(400).json({ error: 'Falta CallSid o CallStatus en el payload.' });
+    return;
+  }
+
+  if (!TERMINAL_CALL_STATUSES.has(callStatus)) {
+    res.status(204).send();
+    return;
+  }
+
+  try {
+    const result = await dbPool.query(
+      'UPDATE calls SET status = $1, duration_seconds = $2 WHERE call_sid = $3',
+      [callStatus, callDuration, callSid]
+    );
+    console.log(`📞 Llamada ${callSid} finalizada con status="${callStatus}" (${callDuration}s) — ${result.rowCount} turno(s) actualizados.`);
+    res.status(204).send();
+  } catch (error: any) {
+    respondToDbError(error, res, 'No se pudo actualizar el estado de la llamada.');
   }
 };

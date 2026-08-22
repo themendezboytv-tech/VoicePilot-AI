@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS calls (
     tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
     assistant_id UUID REFERENCES assistants(id) ON DELETE SET NULL,
     caller_number VARCHAR(50),
+    call_sid VARCHAR(64),
     duration_seconds INT DEFAULT 0,
     status VARCHAR(50) DEFAULT 'completed',
     transcript TEXT,
@@ -43,3 +44,4 @@ CREATE TABLE IF NOT EXISTS calls (
 CREATE INDEX IF NOT EXISTS idx_assistants_tenant ON assistants(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_calls_assistant ON calls(assistant_id);
 CREATE INDEX IF NOT EXISTS idx_calls_tenant ON calls(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_calls_call_sid ON calls(call_sid);
