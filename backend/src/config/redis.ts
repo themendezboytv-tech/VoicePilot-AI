@@ -16,7 +16,16 @@ dotenv.config();
 export const redisClient = new Redis({
   host: process.env.REDIS_HOST || 'localhost',
   port: Number(process.env.REDIS_PORT) || 6379,
+  password: process.env.REDIS_PASSWORD || undefined,
   lazyConnect: true, // Conecta de forma explícita al invocar .connect()
+});
+
+// Sin este listener, un evento 'error' de ioredis (ej. Redis se cae o se
+// reinicia) se propaga como excepción no capturada y tumba el proceso
+// entero. Lo logueamos y dejamos que la reconexión automática de ioredis
+// haga su trabajo.
+redisClient.on('error', (error) => {
+  console.error('❌ [Redis] Error en la conexión:', error.message || error);
 });
 
 /**

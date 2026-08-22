@@ -18,7 +18,7 @@ services:
       POSTGRES_USER: ${DB_USERNAME:-admin}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-secret_password}
     ports:
-      - "5432:5432" # Expone el puerto estándar de PostgreSQL hacia tu máquina local
+      - "127.0.0.1:5432:5432" # Solo accesible desde el propio host, no desde internet
     volumes:
       - alpha_db_data:/var/lib/postgresql/data # Persistencia: los datos no se borran al apagar el contenedor
     networks:
@@ -30,8 +30,9 @@ services:
     image: redis:7-alpine
     container_name: alpha_cache
     restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD}
     ports:
-      - "6379:6379" # Expone el puerto estándar de Redis
+      - "127.0.0.1:6379:6379" # Solo accesible desde el propio host, no desde internet
     volumes:
       - alpha_redis_data:/data # Persistencia para los datos en memoria si es necesario
     networks:
