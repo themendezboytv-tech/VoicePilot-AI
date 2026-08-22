@@ -8,6 +8,28 @@ VoicePilot AI existe para generar ingresos reales como SaaS multi-tenant vendien
 
 Para tareas grandes o ambiguas, releer esta sección antes de proponer un plan.
 
+## Reglas de autonomía
+
+Podés trabajar en modo autónomo (sin pedir aprobación) para: escribir y editar código de la aplicación, correr tests, actualizar documentación, crear ramas nuevas, hacer commits y push a cualquier rama que NO sea main.
+
+SIEMPRE pedime aprobación explícita antes de, aunque estés en modo Auto:
+- Cualquier cambio que toque la base de datos de producción: DELETE, DROP, ALTER destructivo, o cambio de credenciales.
+- Cualquier cambio a docker-compose.yml o a la configuración de los contenedores de producción (alpha_database, alpha_cache).
+- pm2 restart o pm2 stop sobre el proceso de producción.
+- Merge de cualquier rama a main.
+- Instalar dependencias nuevas que no hayamos discutido.
+
+Si terminás una tarea, o te quedás sin instrucciones claras, o encontrás algo que requiere una decisión de negocio (no técnica), parate y dejame un resumen claro. No inventes features nuevas de negocio (facturación, planes, panel web) sin preguntar primero.
+
+## Eficiencia de tokens
+
+- No repitas de vuelta código completo que ya está en el archivo cuando expliques un cambio — describí el cambio o mostrá solo el diff.
+- No leas archivos completos que ya leíste en esta misma sesión salvo que hayan cambiado.
+- Resúmenes cortos y directos salvo que pida detalle explícito.
+- Antes de tareas grandes, dame un plan breve en vez de arrancar a ejecutar y explicar sobre la marcha.
+
+Objetivo de esta sección: poder trabajar largos tramos sin supervisión constante y gastando el mínimo de contexto posible, pero sin arriesgar producción ni tomar decisiones que no te corresponden a vos.
+
 ## What this is
 
 VoicePilot AI backend: a multi-tenant SaaS engine that will let businesses run an AI-powered voice receptionist. Each Tenant configures its own Assistant (system prompt, greeting, phone number) without touching code. Node.js + Express + TypeScript, PostgreSQL for persistence, Redis for short-term conversation memory.
@@ -22,7 +44,9 @@ Run from `backend/`:
 - `npm run build` — compile TypeScript to `dist/` (`tsc`)
 - `npm start` — run the compiled build (`node dist/index.js`)
 
-There is no lint script and no test suite configured in this repo.
+There is no lint script and no automated test framework configured in this repo. There is one manual/scripted end-to-end check:
+
+- `npm run test:e2e:ai-chat` — spins up disposable Postgres+Redis containers via `docker-compose.test.yml` (`voicepilot_test_db`/`voicepilot_test_cache`, ports `5433`/`6380` — separate from `alpha_database`/`alpha_cache`, never touches them), runs `runMigrations()` against that throwaway DB, seeds a test tenant/assistant, spins up a minimal Express app with only `/api/ai` mounted, and drives real HTTP requests at it (missing-fields → `400`, unknown assistant → `404`, a real round trip that calls Gemini for real and checks the response, the `calls` row, and the Redis session history across two messages). See `scripts/e2e-ai-chat.ts`. It overrides `DB_*`/`REDIS_*` env vars in-process before importing anything that reads them, specifically so it can never end up pointed at production. Leaves the test containers running for reuse; `npm run test:e2e:down` tears them down.
 
 Production deploy (documented in the root `README.md`): `git pull` → `npm install` → `npm run build` → `pm2 restart voicepilot-backend`. The app is run under PM2 as `voicepilot-backend`, with PostgreSQL and Redis in Docker containers named `alpha_database` and `alpha_cache` (see root `docker-compose.yml`).
 
@@ -36,8 +60,21 @@ Layering is a plain Express REST setup: `routes/*.routes.ts` → `controllers/*.
 - `src/providers/ai/` — the AI abstraction. `ai-provider.interface.ts` defines `AIProvider.generateResponse(systemPrompt, userMessage)`. `gemini.provider.ts` and `openai.provider.ts` implement it (Gemini keeps its multi-model fallback list; OpenAI uses `OPENAI_MODEL`, default `gpt-4o-mini`). `index.ts` exports `getAIProvider(name)`, which resolves the provider from the assistant's `ai_provider` DB column and falls back to Gemini for unknown/missing names. There used to be a `src/services/gemini.service.ts` that called Gemini directly — it's gone; `ai.controller.ts` now goes through `getAIProvider(assistant.ai_provider)` instead.
 - `src/providers/telephony/` — the telephony abstraction, same shape as the AI one. `telephony-provider.interface.ts` defines four methods: `parseIncomingCall`/`parseSpeechResult` (normalize a provider's webhook payload) and `buildGreetingResponse`/`buildReplyResponse`/`buildHangupResponse` (build a `{ body, contentType }` voice-markup response). `twilio.provider.ts` is the only implementation, built on the `twilio` package's `twiml.VoiceResponse` (Spanish `es-ES` voice, Twilio's built-in speech recognition — no separate STT/TTS service integrated). `index.ts` exports `getTelephonyProvider(name)`, defaulting to Twilio.
 - `src/controllers/telephony.controller.ts` + `src/routes/telephony.routes.ts` (`POST /api/telephony/twilio/voice`, `POST /api/telephony/twilio/gather`) — the real-call flow: `/voice` looks up the assistant by `phone_number` (matched against Twilio's `To` field) and returns a greeting + speech-gather TwiML; `/gather` receives the transcribed speech (Twilio's built-in STT), runs it through `getAIProvider`, reuses the *same* Redis session key scheme as the text channel (`{assistant_id}:{caller_number}`) so a caller's history is shared across channels, logs a `calls` row per conversational turn (status `in-progress`, `duration_seconds` 0 — there's no per-call aggregation yet, each turn is its own row, same pattern the text channel already used), and loops back into another gather. Both handlers verify `X-Twilio-Signature` first (`isValidTwilioSignature`, using the `validateRequest` helper from the `twilio` package against `TELEPHONY_AUTH_TOKEN`) and reject with `403` if it's missing/invalid/unconfigured — since this route is registered specifically as Twilio's webhook, the raw payload is always parsed with the Twilio provider (`FALLBACK_PROVIDER_NAME = 'twilio'`), but once the assistant is loaded, response-building switches to `getTelephonyProvider(assistant.telephony_provider)`. Still never exercised against a real Twilio account/phone number, only unit-tested in isolation (TwiML output shape).
-- `src/services/memory.service.ts` — Redis-backed short-term conversation memory, keyed as `chat_history:{assistant_id}:{caller_number}`, capped at ~2000 chars and expiring after `HISTORY_TTL` (1 hour). Note it creates its **own** `redis` client (`createClient` from the `redis` package) independent of `config/redis.ts` (which uses `ioredis`) — two separate Redis connections exist side by side. Shared by both `ai.controller.ts` and `telephony.controller.ts`.
+- `src/services/memory.service.ts` — Redis-backed short-term conversation memory, keyed as `chat_history:{assistant_id}:{caller_number}`, capped at ~2000 chars and expiring after `HISTORY_TTL` (1 hour). Shares the single `redisClient` (`ioredis`) exported from `config/redis.ts` — it used to create its own second connection via the `redis` package, that's gone now. Shared by both `ai.controller.ts` and `telephony.controller.ts`.
 - `src/controllers/ai.controller.ts` (`POST /api/ai/chat`, text channel) and `src/controllers/telephony.controller.ts` (voice channel) both follow the same shape: load the assistant → fetch Redis history → call `getAIProvider(assistant.ai_provider)` with history prepended as context → save the new exchange back to Redis → persist a `calls` row with a synthesized transcript.
+- `src/utils/db-errors.ts` — `respondToDbError(error, res, fallbackMessage)`, used by every JSON-responding controller's catch block (`tenant`, `assistant`, `call`, `ai`; not `telephony`, which always has to answer with TwiML/voice-markup instead of JSON, even on error). Distinguishes DB connection failures (`ECONNREFUSED`/`ETIMEDOUT`/Postgres `08*`/`57P03` → `503`) from constraint violations (`23505` unique → `409`, `23503` FK → `400`, `23502` not-null → `400`) and falls back to `500` + the caller-supplied message for anything else. `ai.controller.ts` additionally special-cases the `Error` thrown by AI providers (message prefixed `Fallo en el motor de IA`) as `502`, since that's an upstream provider failure, not a DB one.
+
+## Pendientes conocidos
+
+Encontrados durante trabajo de limpieza/hardening (branch `feature/cleanup-and-hardening`), documentados pero **sin arreglar** — cualquiera de estos requiere una decisión del usuario antes de tocarlo, no son fixes triviales.
+
+- ~~**[Alta prioridad, infraestructura] Postgres y Redis de producción quedan expuestos en `0.0.0.0`, y Redis no tiene password.**~~ **RESUELTO (2026-08-21).** `docker-compose.yml` ahora publica `127.0.0.1:5432:5432` y `127.0.0.1:6379:6379` (antes `5432:5432`/`6379:6379` sin restricción — confirmado con `ss -tlnp` que escuchaban en `0.0.0.0`/`[::]` antes del fix). El servicio `redis` corre con `command: redis-server --requirepass ${REDIS_PASSWORD}`, y `config/redis.ts` ahora pasa `password: process.env.REDIS_PASSWORD`. Se creó un `.env` en la raíz del repo (gitignorado) con `DB_PASSWORD`/`REDIS_PASSWORD` random fuertes, reemplazando el default `admin`/`secret_password`; `backend/.env` se sincronizó con las mismas credenciales. Nota para quien retome infra: como el volumen `alpha_db_data` ya existía, `POSTGRES_PASSWORD` del compose no tomó efecto solo con recrear el contenedor (esa var solo aplica al inicializar un volumen vacío) — hubo que correr `ALTER USER admin WITH PASSWORD '...'` a mano dentro del Postgres ya corriendo para sincronizar el password real. Verificado: `docker ps`/`ss -tlnp` confirman ambos puertos solo en `127.0.0.1`, y `voicepilot-backend` responde `200` en `/health` con las credenciales nuevas.
+- **No hay separación entre entorno de desarrollo y producción.** `backend/.env` (el que usa `npm run dev`) apunta a `DB_HOST=localhost`/`REDIS_HOST=localhost`, que resuelven a los mismos contenedores `alpha_database`/`alpha_cache` de producción, y tiene `NODE_ENV=production` seteado ahí mismo. Cualquier prueba manual corrida con `npm run dev` escribe directo sobre datos reales. Esto es lo que obligó a armar `docker-compose.test.yml` (contenedores aislados en otros puertos) para el script de la tarea 3 en vez de reusar el `.env` existente.
+- **CRUD incompleto en tenants/assistants.** Solo hay `POST`/`GET` (`tenant.routes.ts`, `assistant.routes.ts`) — no hay forma de editar `system_prompt`, `greeting_message`, `phone_number`, `ai_provider`, `telephony_provider`, ni desactivar (`is_active`) un tenant o assistant ya creado sin tocar la base de datos a mano. Para un SaaS donde el cliente configura su propio asistente, esto probablemente hace falta antes de vender el producto en serio — pero es una decisión de producto, no la tomo por mi cuenta.
+- **`src/test-models.ts`** es un script suelto de debugging manual (hace `fetch` directo a la API de Gemini para listar modelos habilitados por la API key), vive en `src/` en vez de `scripts/`, y no está referenciado por ningún script de `package.json`. Se compila igual dentro de `dist/` en cada `npm run build` sin cumplir ninguna función en producción.
+- **Duración de llamada inventada en ambos canales.** `ai.controller.ts` graba `duration_seconds: 15` fijo (no la duración real de la interacción) en cada fila de `calls`; `telephony.controller.ts` graba `0` por cada turno de voz (ya documentado más arriba). Cualquier reporte de "minutos consumidos" por tenant hoy estaría inventado, no medido.
+- **`getAIProvider`/`getTelephonyProvider` fallan en silencio ante un nombre desconocido** (solo `console.warn`, sin avisarle al usuario del sistema). Si alguien crea un assistant con `ai_provider: "chatgpt"` (typo de `"openai"`) por la API, el asistente queda funcionando con Gemini sin que nadie se entere hasta notar el comportamiento raro.
+- **Logs de conexión con nombre de contenedor hardcodeado.** `testDbConnection()`/`testRedisConnection()` en `config/database.ts`/`config/redis.ts` siempre loguean "...conectado con el contenedor alpha_database/alpha_cache", sin importar el host/puerto real al que se conectaron. Se notó corriendo el script de test de la tarea 3: logueaba "alpha_database" aunque apuntaba a `voicepilot_test_db`. Cosmético, pero confunde al debuggear.
 
 ## Language and comments
 

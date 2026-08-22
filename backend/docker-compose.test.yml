@@ -1,0 +1,36 @@
+# ==============================================================================
+# ARCHIVO DE INFRAESTRUCTURA: Docker Compose (SOLO TESTING)
+# Proyecto: VoicePilot AI
+# Descripción: Postgres + Redis desechables, aislados de los contenedores de
+# producción (alpha_database / alpha_cache). Puertos distintos a propósito
+# para que nunca puedan confundirse ni colisionar con los de producción.
+# Sin volúmenes: los datos se pierden al bajar los contenedores, que es
+# justamente lo que queremos para un entorno de test.
+# ==============================================================================
+
+services:
+  postgres_test:
+    image: postgres:15-alpine
+    container_name: voicepilot_test_db
+    restart: "no"
+    environment:
+      POSTGRES_DB: voicepilot_test
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+    ports:
+      - "5433:5432"
+    networks:
+      - voicepilot_test_network
+
+  redis_test:
+    image: redis:7-alpine
+    container_name: voicepilot_test_cache
+    restart: "no"
+    ports:
+      - "6380:6379"
+    networks:
+      - voicepilot_test_network
+
+networks:
+  voicepilot_test_network:
+    driver: bridge

@@ -6,6 +6,7 @@
 
 import { Request, Response } from 'express';
 import { dbPool } from '../config/database';
+import { respondToDbError } from '../utils/db-errors';
 
 /**
  * Registra una nueva llamada en el historial (Normalmente llamado por un Webhook al terminar)
@@ -39,8 +40,7 @@ export const registerCall = async (req: Request, res: Response): Promise<void> =
       data: result.rows[0]
     });
   } catch (error) {
-    console.error('❌ Error al registrar llamada:', error);
-    res.status(500).json({ error: 'Error interno del servidor al registrar la llamada' });
+    respondToDbError(error, res, 'Error interno del servidor al registrar la llamada');
   }
 };
 
@@ -68,7 +68,6 @@ export const getCallLogs = async (req: Request, res: Response): Promise<void> =>
       data: result.rows
     });
   } catch (error) {
-    console.error('❌ Error al obtener historial de llamadas:', error);
-    res.status(500).json({ error: 'Error interno al consultar el historial' });
+    respondToDbError(error, res, 'Error interno al consultar el historial');
   }
 };

@@ -6,6 +6,7 @@
 
 import { Request, Response } from 'express';
 import { dbPool } from '../config/database';
+import { respondToDbError } from '../utils/db-errors';
 
 /**
  * Crea una nueva empresa (Tenant) en la base de datos
@@ -35,15 +36,15 @@ export const createTenant = async (req: Request, res: Response): Promise<void> =
       data: result.rows[0]
     });
   } catch (error: any) {
-    console.error('❌ Error al crear tenant:', error);
-    
-    // Capturar error de duplicidad de 'slug' (código 23505 en PostgreSQL)
+    // El slug duplicado es el caso más común y merece un mensaje específico;
+    // el resto (conexión caída, FK inválida, etc.) lo cubre el helper.
     if (error.code === '23505') {
+      console.error('❌ Error al crear tenant (slug duplicado):', error);
       res.status(409).json({ error: 'El slug (identificador) ya está en uso por otra empresa' });
       return;
     }
-    
-    res.status(500).json({ error: 'Error interno del servidor al crear la empresa' });
+
+    respondToDbError(error, res, 'Error interno del servidor al crear la empresa');
   }
 };
 
@@ -64,7 +65,6 @@ export const getTenants = async (req: Request, res: Response): Promise<void> => 
       data: result.rows
     });
   } catch (error) {
-    console.error('❌ Error al obtener tenants:', error);
-    res.status(500).json({ error: 'Error interno del servidor al consultar empresas' });
+    respondToDbError(error, res, 'Error interno del servidor al consultar empresas');
   }
 };

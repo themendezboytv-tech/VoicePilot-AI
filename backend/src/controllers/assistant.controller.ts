@@ -6,6 +6,7 @@
 
 import { Request, Response } from 'express';
 import { dbPool } from '../config/database';
+import { respondToDbError } from '../utils/db-errors';
 
 /**
  * Crea un nuevo Asistente Telefónico
@@ -45,8 +46,7 @@ export const createAssistant = async (req: Request, res: Response): Promise<void
       data: result.rows[0]
     });
   } catch (error: any) {
-    console.error('❌ Error al crear asistente:', error);
-    res.status(500).json({ error: 'Error interno del servidor al crear el asistente' });
+    respondToDbError(error, res, 'Error interno del servidor al crear el asistente');
   }
 };
 
@@ -74,7 +74,6 @@ export const getAssistants = async (req: Request, res: Response): Promise<void> 
       data: result.rows
     });
   } catch (error) {
-    console.error('❌ Error al obtener asistentes:', error);
-    res.status(500).json({ error: 'Error interno del servidor al consultar asistentes' });
+    respondToDbError(error, res, 'Error interno del servidor al consultar asistentes');
   }
 };
