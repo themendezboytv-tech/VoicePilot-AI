@@ -30,6 +30,14 @@ const TWILIO_AUTH_TOKEN = process.env.TELEPHONY_AUTH_TOKEN || '';
 // todavía) y se corta con una despedida educada al superar el máximo.
 const MAX_SILENCE_RETRIES = 1;
 
+// Sin esto, una llamada podía seguir en loop indefinidamente (cada turno es
+// una llamada nueva a Gemini, sin control de costo ni de duración real de
+// la llamada en Twilio). No hay estado de llamada en DB para esto todavía,
+// así que turno y hora de inicio viajan como query params en la propia
+// action URL del Gather, igual que silence_retries.
+const MAX_CALL_TURNS = 15;
+const MAX_CALL_DURATION_MS = 8 * 60 * 1000; // 8 minutos
+
 function buildBaseUrl(req: Request): string {
   // req.protocol respeta X-Forwarded-Proto gracias a app.set('trust proxy', true),
   // pero req.get('host') SIEMPRE lee el header Host crudo (Express no lo hace
@@ -94,7 +102,7 @@ export const handleIncomingCall = async (req: Request, res: Response): Promise<v
 
     const assistant = assistantResult.rows[0];
     const provider = getTelephonyProvider(assistant.telephony_provider);
-    const gatherActionUrl = `${buildBaseUrl(req)}/api/telephony/twilio/gather?assistant_id=${assistant.id}`;
+    const gatherActionUrl = `${buildBaseUrl(req)}/api/telephony/twilio/gather?assistant_id=${assistant.id}&turn=1&call_started_at=${Date.now()}`;
 
     const response = provider.buildGreetingResponse(
       assistant.greeting_message || `Hola, gracias por llamar a ${assistant.name}.`,
@@ -123,10 +131,26 @@ export const handleSpeechResult = async (req: Request, res: Response): Promise<v
 
   const fallbackProvider = getTelephonyProvider(FALLBACK_PROVIDER_NAME);
   const assistantId = req.query.assistant_id as string;
-  const gatherActionUrl = `${buildBaseUrl(req)}/api/telephony/twilio/gather?assistant_id=${assistantId}`;
+  const baseGatherPath = `${buildBaseUrl(req)}/api/telephony/twilio/gather?assistant_id=${assistantId}`;
   const silenceRetries = parseInt(req.query.silence_retries as string, 10) || 0;
+  // `turn` solo cuenta intercambios reales con la IA — un silencio reintenta
+  // sin consumir turno (ver más abajo). Si faltan (llamada armada antes de
+  // este cambio, o payload manipulado), se asume recién empezando/ahora.
+  const turn = parseInt(req.query.turn as string, 10) || 1;
+  const callStartedAt = parseInt(req.query.call_started_at as string, 10) || Date.now();
 
   try {
+    const elapsedMs = Date.now() - callStartedAt;
+
+    if (turn > MAX_CALL_TURNS || elapsedMs > MAX_CALL_DURATION_MS) {
+      console.warn(`⚠️ Límite de llamada alcanzado (turno ${turn}/${MAX_CALL_TURNS}, ${Math.round(elapsedMs / 1000)}s/${MAX_CALL_DURATION_MS / 1000}s), se cuelga.`);
+      const response = fallbackProvider.buildHangupResponse(
+        'Hemos llegado al límite de esta llamada. Si necesitás más ayuda, por favor volvé a llamarnos. ¡Gracias por tu paciencia!'
+      );
+      res.type(response.contentType).send(response.body);
+      return;
+    }
+
     const speech = fallbackProvider.parseSpeechResult(req.body);
 
     if (!speech.speechResult) {
@@ -139,10 +163,10 @@ export const handleSpeechResult = async (req: Request, res: Response): Promise<v
         return;
       }
 
-      // Query param en la URL de reintento (no en gatherActionUrl base) para
-      // que un turno exitoso posterior no arrastre el conteo: la respuesta
-      // normal más abajo sigue usando gatherActionUrl tal cual, sin el param.
-      const retryGatherUrl = `${gatherActionUrl}&silence_retries=${silenceRetries + 1}`;
+      // Mismo `turn` (el silencio no consume turno) + silence_retries
+      // incrementado, en vez de sobre gatherActionUrl base (definida abajo
+      // con turn+1) para no mezclar los dos contadores.
+      const retryGatherUrl = `${baseGatherPath}&turn=${turn}&call_started_at=${callStartedAt}&silence_retries=${silenceRetries + 1}`;
       const response = fallbackProvider.buildReplyResponse(
         'No te escuché bien, ¿sigues ahí? Por favor repite tu mensaje.',
         retryGatherUrl
@@ -187,7 +211,8 @@ export const handleSpeechResult = async (req: Request, res: Response): Promise<v
       [assistant.tenant_id, assistant.id, speech.from, speech.callSid, 0, 'in-progress', transcript]
     );
 
-    const response = provider.buildReplyResponse(aiResponse, gatherActionUrl);
+    const nextGatherUrl = `${baseGatherPath}&turn=${turn + 1}&call_started_at=${callStartedAt}`;
+    const response = provider.buildReplyResponse(aiResponse, nextGatherUrl);
     res.type(response.contentType).send(response.body);
   } catch (error: any) {
     console.error(`❌ Error en webhook de resultado de voz [code=${error?.code ?? 'desconocido'}]:`, error);
