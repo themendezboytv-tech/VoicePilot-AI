@@ -22,6 +22,13 @@ const FALLBACK_PROVIDER_NAME = 'twilio';
 
 const TWILIO_AUTH_TOKEN = process.env.TELEPHONY_AUTH_TOKEN || '';
 
+// Twilio no distingue "silencio total" de "habló pero el STT no transcribió
+// nada" — con actionOnEmptyResult ambos casos llegan acá como SpeechResult
+// vacío. En vez de reintentar para siempre, se cuenta cuántas veces
+// consecutivas pasó esto (vía query param, no hay estado de llamada en DB
+// todavía) y se corta con una despedida educada al superar el máximo.
+const MAX_SILENCE_RETRIES = 1;
+
 function buildBaseUrl(req: Request): string {
   // req.protocol respeta X-Forwarded-Proto gracias a app.set('trust proxy', true),
   // pero req.get('host') SIEMPRE lee el header Host crudo (Express no lo hace
@@ -116,12 +123,29 @@ export const handleSpeechResult = async (req: Request, res: Response): Promise<v
   const fallbackProvider = getTelephonyProvider(FALLBACK_PROVIDER_NAME);
   const assistantId = req.query.assistant_id as string;
   const gatherActionUrl = `${buildBaseUrl(req)}/api/telephony/twilio/gather?assistant_id=${assistantId}`;
+  const silenceRetries = parseInt(req.query.silence_retries as string, 10) || 0;
 
   try {
     const speech = fallbackProvider.parseSpeechResult(req.body);
 
     if (!speech.speechResult) {
-      const response = fallbackProvider.buildReplyResponse('No te escuché bien, ¿puedes repetirlo?', gatherActionUrl);
+      if (silenceRetries >= MAX_SILENCE_RETRIES) {
+        console.warn(`⚠️ Sin audio del llamante tras ${silenceRetries + 1} intentos, se cuelga la llamada.`);
+        const response = fallbackProvider.buildHangupResponse(
+          'No logré escucharte. Vamos a finalizar la llamada por ahora, ¡que tengas un buen día!'
+        );
+        res.type(response.contentType).send(response.body);
+        return;
+      }
+
+      // Query param en la URL de reintento (no en gatherActionUrl base) para
+      // que un turno exitoso posterior no arrastre el conteo: la respuesta
+      // normal más abajo sigue usando gatherActionUrl tal cual, sin el param.
+      const retryGatherUrl = `${gatherActionUrl}&silence_retries=${silenceRetries + 1}`;
+      const response = fallbackProvider.buildReplyResponse(
+        'No te escuché bien, ¿sigues ahí? Por favor repite tu mensaje.',
+        retryGatherUrl
+      );
       res.type(response.contentType).send(response.body);
       return;
     }

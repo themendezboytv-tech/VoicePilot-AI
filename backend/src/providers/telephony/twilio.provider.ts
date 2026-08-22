@@ -38,7 +38,10 @@ export class TwilioProvider implements TelephonyProvider {
       action: gatherActionUrl,
       method: 'POST',
       speechTimeout: 'auto',
-      language: 'es-ES'
+      language: 'es-ES',
+      // Sin esto, un silencio total (sin ningún audio detectado) no dispara
+      // el webhook de /gather y la llamada queda colgada sin más.
+      actionOnEmptyResult: true
     });
     gather.say({ language: 'es-ES' }, greetingMessage);
 
@@ -52,7 +55,8 @@ export class TwilioProvider implements TelephonyProvider {
       action: gatherActionUrl,
       method: 'POST',
       speechTimeout: 'auto',
-      language: 'es-ES'
+      language: 'es-ES',
+      actionOnEmptyResult: true
     });
     gather.say({ language: 'es-ES' }, aiReplyText);
 
