@@ -20,6 +20,8 @@ export interface SpeechResultPayload {
   to: string;
   callSid: string;
   speechResult: string;
+  /** Confianza del STT (0-1). undefined si el proveedor no la manda. */
+  confidence?: number;
 }
 
 /** Respuesta de voz lista para devolver al proveedor (markup + content-type). */
