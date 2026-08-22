@@ -38,6 +38,11 @@ const MAX_SILENCE_RETRIES = 1;
 const MAX_CALL_TURNS = 15;
 const MAX_CALL_DURATION_MS = 8 * 60 * 1000; // 8 minutos
 
+// Por debajo de esto, una transcripción se trata como no entendida en vez
+// de mandarla a Gemini tal cual. undefined (proveedor no manda Confidence)
+// no cuenta como baja: se sigue confiando en el texto como antes.
+const MIN_SPEECH_CONFIDENCE = 0.5;
+
 function buildBaseUrl(req: Request): string {
   // req.protocol respeta X-Forwarded-Proto gracias a app.set('trust proxy', true),
   // pero req.get('host') SIEMPRE lee el header Host crudo (Express no lo hace
@@ -152,10 +157,15 @@ export const handleSpeechResult = async (req: Request, res: Response): Promise<v
     }
 
     const speech = fallbackProvider.parseSpeechResult(req.body);
+    const lowConfidence = speech.confidence !== undefined && speech.confidence < MIN_SPEECH_CONFIDENCE;
 
-    if (!speech.speechResult) {
+    if (!speech.speechResult || lowConfidence) {
+      if (lowConfidence) {
+        console.warn(`⚠️ Transcripción con confianza baja (${speech.confidence}) descartada: "${speech.speechResult}"`);
+      }
+
       if (silenceRetries >= MAX_SILENCE_RETRIES) {
-        console.warn(`⚠️ Sin audio del llamante tras ${silenceRetries + 1} intentos, se cuelga la llamada.`);
+        console.warn(`⚠️ Sin audio útil del llamante tras ${silenceRetries + 1} intentos (silencio o confianza baja), se cuelga la llamada.`);
         const response = fallbackProvider.buildHangupResponse(
           'No logré escucharte. Vamos a finalizar la llamada por ahora, ¡que tengas un buen día!'
         );
