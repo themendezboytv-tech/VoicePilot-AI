@@ -15,6 +15,10 @@
 // assistants.phone_number). El nombre de la variable deja explícito que es
 // una configuración de desarrollo/pruebas, para que sea fácil de encontrar
 // y reemplazar cuando exista WhatsApp multi-tenant de verdad.
+//
+// WHATSAPP_DEV_ALLOWED_NUMBER (env var, también temporal) restringe
+// además QUIÉN puede hablar con ese asistente: cualquier remitente
+// distinto se ignora en silencio (sin respuesta, sin crear records).
 // ==============================================================================
 
 import { Request, Response } from 'express';
@@ -25,6 +29,11 @@ import { sendWhatsappUnificadoMessage } from '../services/whatsapp-unificado.cli
 
 const WEBHOOK_SECRET = process.env.WHATSAPP_WEBHOOK_SECRET || '';
 const DEV_ASSISTANT_ID = process.env.WHATSAPP_DEV_ASSISTANT_ID || '';
+// Restricción adicional, también temporal: mientras el canal sea un solo
+// número compartido, solo este remitente recibe respuesta. Falla cerrado
+// a propósito (igual que WEBHOOK_SECRET) — si no está configurado, no se
+// le contesta a nadie en vez de contestarle a cualquiera.
+const ALLOWED_NUMBER = process.env.WHATSAPP_DEV_ALLOWED_NUMBER || '';
 
 /**
  * whatsapp-unificado manda el remitente como JID de Baileys
@@ -35,6 +44,13 @@ const DEV_ASSISTANT_ID = process.env.WHATSAPP_DEV_ASSISTANT_ID || '';
  */
 function normalizeContact(jidOrPhone: string): string {
   return jidOrPhone.split('@')[0];
+}
+
+// Compara solo dígitos, así "+34 631 46 96 14" (como lo escribiría una
+// persona en WHATSAPP_DEV_ALLOWED_NUMBER) matchea contra el
+// contactIdentifier ya normalizado (sin +, sin espacios).
+function soloDigitos(valor: string): string {
+  return valor.replace(/\D/g, '');
 }
 
 /**
@@ -77,6 +93,15 @@ export const handleWhatsappInbound = async (req: Request, res: Response): Promis
 
     const assistant = assistantResult.rows[0];
     const contactIdentifier = normalizeContact(from);
+
+    // Se ignora en silencio (sin respuesta, sin tocar records) a cualquier
+    // remitente que no sea el número permitido — mismo tratamiento que ya
+    // reciben los mensajes fromMe del lado de whatsapp-unificado.
+    if (!ALLOWED_NUMBER || soloDigitos(contactIdentifier) !== soloDigitos(ALLOWED_NUMBER)) {
+      console.warn(`⚠️ Mensaje de WhatsApp ignorado: remitente ${contactIdentifier} no es WHATSAPP_DEV_ALLOWED_NUMBER.`);
+      res.status(200).json({ ok: true, ignored: true });
+      return;
+    }
 
     const { reply } = await runAssistantBrain({
       assistant,
