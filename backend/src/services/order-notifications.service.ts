@@ -73,8 +73,7 @@ export async function notifyDeliveryPerson(record: RecordRow): Promise<void> {
     return;
   }
 
-  const detalle = formatearDatosPedido(record);
-  const mensaje = `📦 Pedido listo para entregar\n\n${detalle}`;
+  const mensaje = armarMensajeRepartidor(record);
 
   try {
     await sendWhatsappUnificadoMessage(DELIVERY_WHATSAPP_NUMBER, mensaje);
@@ -87,18 +86,36 @@ export async function notifyDeliveryPerson(record: RecordRow): Promise<void> {
 }
 
 /**
- * Arma un texto legible con lo que haya disponible del pedido — no asume
- * que exista un campo "dirección" fijo, porque data es JSONB libre y
- * depende de qué le haya preguntado el asistente al cliente.
+ * Arma una frase legible en vez de una lista técnica clave: valor — pensada
+ * para que un repartidor la lea de un vistazo en WhatsApp. No asume que
+ * existan campos fijos como "dirección": data es JSONB libre y depende de
+ * qué le haya preguntado el asistente al cliente, así que cada pieza se
+ * agrega solo si está presente.
+ *
+ * "customer_name" se busca primero adentro de `data` porque así es como
+ * conversation.service.ts/record-capture.service.ts guardan el nombre que
+ * captura la IA — `record.contact_name` (la columna) casi siempre queda
+ * null para records creados desde una conversación, solo se usa si alguien
+ * lo cargó a mano (ej. vía la API).
  */
-function formatearDatosPedido(record: RecordRow): string {
-  const lineas = [
-    `Tipo: ${record.record_type}`,
-    record.contact_name ? `Cliente: ${record.contact_name}` : null,
-    record.contact_identifier ? `Contacto: ${record.contact_identifier}` : null,
-    ...Object.entries(record.data || {}).map(([clave, valor]) => `${clave}: ${JSON.stringify(valor)}`),
-    record.notes ? `Notas: ${record.notes}` : null
-  ].filter((linea): linea is string => !!linea);
+function armarMensajeRepartidor(record: RecordRow): string {
+  const data = (record.data || {}) as Record<string, any>;
 
-  return lineas.join('\n');
+  const items = Array.isArray(data.items) && data.items.length > 0
+    ? data.items.join(', ')
+    : 'Pedido';
+
+  const cliente = record.contact_name || data.customer_name || 'cliente sin nombre registrado';
+
+  // Dirección + cualquier nota de entrega (puede venir en la columna
+  // records.notes o adentro de data.notes, según cómo se haya creado el
+  // record) — se combinan en una sola coletilla, ignorando lo que esté vacío.
+  const detalles = [data.address, record.notes, data.notes].filter(
+    (valor): valor is string => typeof valor === 'string' && valor.trim().length > 0
+  );
+  const coletilla = detalles.length > 0 ? `, ${detalles.join(', ')}` : '';
+
+  const telefono = record.contact_identifier ? `. Tel: ${record.contact_identifier}` : '';
+
+  return `📦 Nuevo pedido para entregar: ${items} — ${cliente}${coletilla}${telefono}`;
 }
