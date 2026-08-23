@@ -25,6 +25,14 @@ export async function runMigrations(): Promise<void> {
         phone_number VARCHAR(50),
         ai_provider VARCHAR(50) DEFAULT 'gemini',
         telephony_provider VARCHAR(50) DEFAULT 'twilio',
+        -- Marca a un asistente como "toma pedidos/turnos": habilita la
+        -- captura de datos estructurados (ver record-capture.service.ts) en
+        -- cualquier canal que lo consulte. false por defecto para no cambiar
+        -- el comportamiento de ningún asistente existente.
+        captures_records BOOLEAN DEFAULT false,
+        -- record_type a usar cuando se crea un record desde este asistente
+        -- si el propio JSON estructurado no trae uno explícito.
+        default_record_type VARCHAR(50) DEFAULT 'order',
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -86,6 +94,8 @@ export async function runMigrations(): Promise<void> {
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS phone_number VARCHAR(50);
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS ai_provider VARCHAR(50) DEFAULT 'gemini';
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS telephony_provider VARCHAR(50) DEFAULT 'twilio';
+    ALTER TABLE assistants ADD COLUMN IF NOT EXISTS captures_records BOOLEAN DEFAULT false;
+    ALTER TABLE assistants ADD COLUMN IF NOT EXISTS default_record_type VARCHAR(50) DEFAULT 'order';
     ALTER TABLE calls ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE;
     ALTER TABLE calls ADD COLUMN IF NOT EXISTS caller_number VARCHAR(50);
     ALTER TABLE calls ADD COLUMN IF NOT EXISTS call_sid VARCHAR(64);

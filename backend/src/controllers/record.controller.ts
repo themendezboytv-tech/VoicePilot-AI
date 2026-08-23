@@ -10,7 +10,7 @@
 import { Request, Response } from 'express';
 import { dbPool } from '../config/database';
 import { respondToDbError } from '../utils/db-errors';
-import { findOpenRecordForContact } from '../services/record.service';
+import { findOpenRecordForContact, createRecord as createRecordInDb } from '../services/record.service';
 
 // Statuses válidos del ciclo de vida de un record. Se valida acá (a nivel
 // aplicación) en vez de con un CHECK en la base de datos, siguiendo la
@@ -64,27 +64,24 @@ export const createRecord = async (req: Request, res: Response): Promise<void> =
       }
     }
 
-    const result = await dbPool.query(
-      `INSERT INTO records (tenant_id, assistant_id, interaction_id, record_type, channel, contact_name, contact_identifier, data, notes)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING *`,
-      [
-        tenant_id,
-        assistant_id || null,
-        interaction_id || null,
-        record_type,
-        channel || 'voice',
-        contact_name || null,
-        contact_identifier || null,
-        data || {},
-        notes || null
-      ]
-    );
+    // Misma función que usa el flujo de voz (telephony.controller.ts) para
+    // crear records, así el SQL de inserción vive en un solo lugar.
+    const record = await createRecordInDb({
+      tenantId: tenant_id,
+      assistantId: assistant_id,
+      interactionId: interaction_id,
+      recordType: record_type,
+      channel,
+      contactName: contact_name,
+      contactIdentifier: contact_identifier,
+      data,
+      notes
+    });
 
     res.status(201).json({
       created: true,
       message: 'Record creado exitosamente',
-      data: result.rows[0]
+      data: record
     });
   } catch (error: any) {
     respondToDbError(error, res, 'Error interno del servidor al crear el record');

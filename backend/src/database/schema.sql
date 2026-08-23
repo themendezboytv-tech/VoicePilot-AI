@@ -25,6 +25,11 @@ CREATE TABLE IF NOT EXISTS assistants (
     phone_number VARCHAR(50),
     ai_provider VARCHAR(50) DEFAULT 'gemini',
     telephony_provider VARCHAR(50) DEFAULT 'twilio',
+    -- Marca a un asistente como "toma pedidos/turnos": habilita la captura
+    -- de datos estructurados en cualquier canal que lo consulte.
+    captures_records BOOLEAN DEFAULT false,
+    -- record_type a usar si el JSON estructurado no trae uno explícito.
+    default_record_type VARCHAR(50) DEFAULT 'order',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
