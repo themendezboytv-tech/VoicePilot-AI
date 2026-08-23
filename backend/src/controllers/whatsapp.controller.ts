@@ -37,6 +37,7 @@ import { redisClient } from '../config/redis';
 import { respondToDbError } from '../utils/db-errors';
 import { runAssistantBrain } from '../services/conversation.service';
 import { sendWhatsappUnificadoMessage } from '../services/whatsapp-unificado.client';
+import { estimateWaitMinutes, buildWaitEstimateSuffix } from '../services/order-notifications.service';
 
 const WEBHOOK_SECRET = process.env.WHATSAPP_WEBHOOK_SECRET || '';
 const DEV_ASSISTANT_ID = process.env.WHATSAPP_DEV_ASSISTANT_ID || '';
@@ -144,15 +145,34 @@ export const handleWhatsappInbound = async (req: Request, res: Response): Promis
       return;
     }
 
-    const { reply } = await runAssistantBrain({
+    const { reply, recordOutcome, recordId, tenantId } = await runAssistantBrain({
       assistant,
       contactIdentifier,
       message: text,
       channel: 'whatsapp'
     });
 
+    // Confirmación automática con tiempo estimado: se agrega cuando el
+    // pedido efectivamente se cerró este turno (se creó de cero, o se
+    // confirmó como continuación de uno abierto) — no cuando todavía está
+    // pendiente de confirmar continuidad (ahí ya va la pregunta de
+    // CONTINUITY_QUESTION, agregar el estimado ahí sería confuso) ni
+    // cuando no hubo ningún record en juego.
+    let replyFinal = reply;
+    if ((recordOutcome === 'created' || recordOutcome === 'appended') && recordId) {
+      try {
+        const minutos = await estimateWaitMinutes(tenantId, recordId);
+        replyFinal = `${reply} ${buildWaitEstimateSuffix(minutos)}`;
+      } catch (estimateError) {
+        // Si falla la estimación, el cliente igual recibe la confirmación
+        // sin el tiempo estimado — no vale la pena perder toda la
+        // respuesta por esto.
+        console.error('❌ Error calculando tiempo estimado de espera:', estimateError);
+      }
+    }
+
     try {
-      await sendWhatsappUnificadoMessage(contactIdentifier, reply);
+      await sendWhatsappUnificadoMessage(contactIdentifier, replyFinal);
     } catch (sendError) {
       // La interacción (y el record, si correspondía) ya quedaron
       // guardados en DB/Redis aunque el envío falle acá — el estado queda
@@ -161,7 +181,7 @@ export const handleWhatsappInbound = async (req: Request, res: Response): Promis
       console.error('❌ Error enviando la respuesta a whatsapp-unificado:', sendError);
     }
 
-    res.status(200).json({ ok: true, reply });
+    res.status(200).json({ ok: true, reply: replyFinal });
   } catch (error) {
     respondToDbError(error, res, 'Error interno procesando el mensaje de WhatsApp');
   }
