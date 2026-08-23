@@ -19,10 +19,21 @@
 // WHATSAPP_DEV_ALLOWED_NUMBER (env var, también temporal) restringe
 // además QUIÉN puede hablar con ese asistente: cualquier remitente
 // distinto se ignora en silencio (sin respuesta, sin crear records).
+//
+// Guarda de idempotencia: el 2026-08-23 se detectó en producción un caso
+// real de mensaje entrante duplicado (mismo texto, mismo contacto, pocos
+// minutos de diferencia) causado por reconexiones de Baileys en
+// whatsapp-unificado — WhatsApp reenvía un mensaje no confirmado tras
+// reconectar. No generó dos records (la ejecución duplicada nunca llegó a
+// completarse del todo), pero para no depender de esa suerte, se ignora
+// explícitamente el mismo texto del mismo contacto si llega de nuevo
+// dentro de un ventana corta.
 // ==============================================================================
 
 import { Request, Response } from 'express';
+import crypto from 'crypto';
 import { dbPool } from '../config/database';
+import { redisClient } from '../config/redis';
 import { respondToDbError } from '../utils/db-errors';
 import { runAssistantBrain } from '../services/conversation.service';
 import { sendWhatsappUnificadoMessage } from '../services/whatsapp-unificado.client';
@@ -51,6 +62,30 @@ function normalizeContact(jidOrPhone: string): string {
 // contactIdentifier ya normalizado (sin +, sin espacios).
 function soloDigitos(valor: string): string {
   return valor.replace(/\D/g, '');
+}
+
+// Ventana de idempotencia: lo suficientemente corta para no bloquear un
+// segundo pedido legítimo del mismo contacto, y lo suficientemente larga
+// para cubrir el reenvío por reconexión de Baileys que se vio en
+// producción (unos pocos minutos entre reintentos, en el peor caso visto).
+const DEDUP_WINDOW_SECONDS = 60;
+
+/**
+ * true si el mismo contacto ya mandó este mismo texto exacto hace menos de
+ * DEDUP_WINDOW_SECONDS. Usa SET ... NX (set solo si no existe) para que el
+ * chequeo-y-marcado sea atómico — dos requests casi simultáneas no pueden
+ * pasar ambas como "no duplicada".
+ */
+async function esMensajeDuplicado(contactIdentifier: string, text: string): Promise<boolean> {
+  try {
+    const hash = crypto.createHash('sha1').update(text).digest('hex');
+    const key = `whatsapp_dedup:${contactIdentifier}:${hash}`;
+    const resultado = await redisClient.set(key, '1', 'EX', DEDUP_WINDOW_SECONDS, 'NX');
+    return resultado !== 'OK';
+  } catch (error) {
+    console.error('❌ Error chequeando duplicado de WhatsApp en Redis:', error);
+    return false; // ante la duda de Redis, no bloqueamos el mensaje
+  }
 }
 
 /**
@@ -100,6 +135,12 @@ export const handleWhatsappInbound = async (req: Request, res: Response): Promis
     if (!ALLOWED_NUMBER || soloDigitos(contactIdentifier) !== soloDigitos(ALLOWED_NUMBER)) {
       console.warn(`⚠️ Mensaje de WhatsApp ignorado: remitente ${contactIdentifier} no es WHATSAPP_DEV_ALLOWED_NUMBER.`);
       res.status(200).json({ ok: true, ignored: true });
+      return;
+    }
+
+    if (await esMensajeDuplicado(contactIdentifier, text)) {
+      console.warn(`⚠️ Mensaje de WhatsApp duplicado ignorado (mismo texto de ${contactIdentifier} dentro de ${DEDUP_WINDOW_SECONDS}s).`);
+      res.status(200).json({ ok: true, ignored: true, reason: 'duplicate' });
       return;
     }
 
