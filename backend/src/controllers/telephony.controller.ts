@@ -13,6 +13,18 @@ import { getTelephonyProvider } from '../providers/telephony';
 import { getAIProvider } from '../providers/ai';
 import { getChatHistory, saveChatHistory } from '../services/memory.service';
 import { respondToDbError } from '../utils/db-errors';
+import { findOpenRecordForContact, createRecord, appendRecordData } from '../services/record.service';
+import {
+  buildRecordCaptureInstructions,
+  buildContinuityFollowUpInstructions,
+  extractRecordData,
+  stripControlFields,
+  getPendingContinuity,
+  savePendingContinuity,
+  clearPendingContinuity,
+  CONTINUITY_QUESTION,
+  PendingContinuity
+} from '../services/record-capture.service';
 
 // Estas dos rutas están registradas específicamente como el webhook de
 // Twilio (/api/telephony/twilio/*), así que antes de conocer el asistente
@@ -176,7 +188,7 @@ export const handleSpeechResult = async (req: Request, res: Response): Promise<v
     }
 
     const assistantResult = await dbPool.query(
-      'SELECT id, tenant_id, name, system_prompt, ai_provider, telephony_provider FROM assistants WHERE id = $1',
+      'SELECT id, tenant_id, name, system_prompt, ai_provider, telephony_provider, captures_records, default_record_type FROM assistants WHERE id = $1',
       [assistantId]
     );
 
@@ -199,12 +211,96 @@ export const handleSpeechResult = async (req: Request, res: Response): Promise<v
       contextMessage = `Este es el historial reciente de la conversación:\n${previousHistory}\n--- FIN DEL HISTORIAL ---\n\nResponde a este nuevo mensaje del cliente siguiendo el hilo de la conversación: "${speech.speechResult}"`;
     }
 
+    // --- Captura de records (pedidos/turnos): aditivo, solo aplica a
+    // asistentes marcados con captures_records. Si el flag está apagado,
+    // effectiveSystemPrompt/contextMessage quedan exactamente igual que
+    // antes de este cambio.
+    let effectiveSystemPrompt = assistant.system_prompt;
+    let pendingContinuity: PendingContinuity | null = null;
+
+    if (assistant.captures_records) {
+      effectiveSystemPrompt = `${assistant.system_prompt}\n\n${buildRecordCaptureInstructions(assistant.default_record_type || 'order')}`;
+
+      pendingContinuity = await getPendingContinuity(sessionId);
+      if (pendingContinuity) {
+        contextMessage = `${contextMessage}\n\n${buildContinuityFollowUpInstructions(pendingContinuity)}`;
+      }
+    }
+
     const aiProvider = getAIProvider(assistant.ai_provider);
-    const aiResponse = await aiProvider.generateResponse(assistant.system_prompt, contextMessage);
+    const aiResponse = await aiProvider.generateResponse(effectiveSystemPrompt, contextMessage);
 
-    await saveChatHistory(sessionId, speech.speechResult, aiResponse);
+    // Separa la respuesta hablada del bloque de datos estructurados (si lo
+    // hay) ANTES de guardar historial/transcript o de mandarla por voz — el
+    // bloque JSON nunca debe llegar al cliente ni quedar en el contexto que
+    // se le reinyecta al modelo en el próximo turno.
+    let spokenReply = aiResponse;
+    let recordData: Record<string, any> | null = null;
 
-    const transcript = `Cliente: ${speech.speechResult} - Asistente: ${aiResponse}`;
+    if (assistant.captures_records) {
+      const extracted = extractRecordData(aiResponse);
+      spokenReply = extracted.spokenReply;
+      recordData = extracted.recordData;
+    }
+
+    if (recordData) {
+      try {
+        if (pendingContinuity) {
+          // Ya le habíamos preguntado al cliente en el turno anterior si
+          // esto era continuación de un record abierto o uno nuevo.
+          if (recordData.is_continuation === true) {
+            await appendRecordData(pendingContinuity.openRecordId, stripControlFields(recordData));
+          } else if (recordData.is_continuation === false) {
+            await createRecord({
+              tenantId: assistant.tenant_id,
+              assistantId: assistant.id,
+              recordType: recordData.record_type || assistant.default_record_type || 'order',
+              channel: 'voice',
+              contactIdentifier: speech.from,
+              data: stripControlFields(recordData)
+            });
+          } else {
+            // El modelo no aclaró is_continuation pese a la instrucción: no
+            // adivinamos qué hacer, se descarta este intento en vez de
+            // crear/actualizar algo incorrecto. El cliente puede repetir el
+            // pedido y el flujo se reintenta desde cero.
+            console.warn('⚠️ Respuesta de continuidad de record sin is_continuation claro, se descarta.');
+          }
+          await clearPendingContinuity(sessionId);
+        } else {
+          const openRecord = await findOpenRecordForContact(assistant.tenant_id, speech.from);
+
+          if (openRecord) {
+            // No se crea nada todavía: se guarda el pedido pendiente y se le
+            // pide al cliente que confirme en el próximo turno.
+            await savePendingContinuity(sessionId, {
+              tenantId: assistant.tenant_id,
+              assistantId: assistant.id,
+              openRecordId: openRecord.id,
+              recordData
+            });
+            spokenReply = `${spokenReply} ${CONTINUITY_QUESTION}`;
+          } else {
+            await createRecord({
+              tenantId: assistant.tenant_id,
+              assistantId: assistant.id,
+              recordType: recordData.record_type || assistant.default_record_type || 'order',
+              channel: 'voice',
+              contactIdentifier: speech.from,
+              data: stripControlFields(recordData)
+            });
+          }
+        }
+      } catch (recordError) {
+        // Un fallo guardando el record no debe cortar la llamada: el flujo
+        // de voz sigue funcionando igual que si esto no existiera.
+        console.error('❌ Error al procesar datos estructurados de record:', recordError);
+      }
+    }
+
+    await saveChatHistory(sessionId, speech.speechResult, spokenReply);
+
+    const transcript = `Cliente: ${speech.speechResult} - Asistente: ${spokenReply}`;
     await dbPool.query(
       `INSERT INTO calls (tenant_id, assistant_id, caller_number, call_sid, duration_seconds, status, transcript)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -212,7 +308,7 @@ export const handleSpeechResult = async (req: Request, res: Response): Promise<v
     );
 
     const nextGatherUrl = `${baseGatherPath}&turn=${turn + 1}&call_started_at=${callStartedAt}`;
-    const response = provider.buildReplyResponse(aiResponse, nextGatherUrl);
+    const response = provider.buildReplyResponse(spokenReply, nextGatherUrl);
     res.type(response.contentType).send(response.body);
   } catch (error: any) {
     console.error(`❌ Error en webhook de resultado de voz [code=${error?.code ?? 'desconocido'}]:`, error);

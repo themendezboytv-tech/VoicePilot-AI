@@ -14,6 +14,7 @@ import { runMigrations } from './database/migrator'; // <-- 1. IMPORTACIÓN DEL 
 import tenantRoutes from './routes/tenant.routes';
 import assistantRoutes from './routes/assistant.routes';
 import callRoutes from './routes/call.routes';
+import recordRoutes from './routes/record.routes';
 import aiRoutes from './routes/ai.routes';
 import telephonyRoutes from './routes/telephony.routes';
 
@@ -39,6 +40,7 @@ app.use(express.urlencoded({ extended: false }));
 app.use('/api/tenants', tenantRoutes);
 app.use('/api/assistants', assistantRoutes);
 app.use('/api/calls', callRoutes);
+app.use('/api/records', recordRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/telephony', telephonyRoutes);
 
