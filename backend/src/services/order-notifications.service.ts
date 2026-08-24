@@ -56,27 +56,60 @@ export function buildWaitEstimateSuffix(estimatedMinutes: number): string {
   return `Tiempo estimado: ~${estimatedMinutes} minutos.`;
 }
 
-const DELIVERY_WHATSAPP_NUMBER = process.env.DELIVERY_WHATSAPP_NUMBER || '';
+// Respaldo global, usado solo si el tenant todavía no tiene su propio
+// número configurado (ver resolveDeliveryNumber). Ver
+// docs/design-delivery-contact-per-tenant.md para el razonamiento completo
+// de este fallback en dos niveles.
+const FALLBACK_DELIVERY_WHATSAPP_NUMBER = process.env.DELIVERY_WHATSAPP_NUMBER || '';
 
 /**
- * Le avisa al repartidor (un solo número configurado por ahora — mismo
- * espíritu provisorio que WHATSAPP_DEV_ALLOWED_NUMBER) que un pedido está
- * listo, con los datos que haya disponibles. Si DELIVERY_WHATSAPP_NUMBER
- * no está configurado, se loguea y no se hace nada — a diferencia de los
- * chequeos de auth del webhook, achá no hay motivo para fallar cerrado
- * (no es una superficie de ataque, es simplemente una notificación que
- * puede no estar configurada todavía).
+ * Resuelve qué número de WhatsApp usar para notificar al repartidor de un
+ * tenant puntual: primero tenants.delivery_whatsapp_number (configurable
+ * por el propio negocio desde el panel de cliente); si no está seteado,
+ * cae al env var global FALLBACK_DELIVERY_WHATSAPP_NUMBER (mismo
+ * comportamiento que existía antes de que la columna existiera, para no
+ * romper tenants que todavía no migraron); si tampoco hay env var, no hay
+ * número disponible.
+ */
+async function resolveDeliveryNumber(tenantId: string): Promise<{ number: string | null; source: 'tenant' | 'env' | 'none' }> {
+  const result = await dbPool.query('SELECT delivery_whatsapp_number FROM tenants WHERE id = $1', [tenantId]);
+  const tenantNumber = result.rows[0]?.delivery_whatsapp_number as string | null | undefined;
+
+  if (tenantNumber) {
+    return { number: tenantNumber, source: 'tenant' };
+  }
+
+  if (FALLBACK_DELIVERY_WHATSAPP_NUMBER) {
+    return { number: FALLBACK_DELIVERY_WHATSAPP_NUMBER, source: 'env' };
+  }
+
+  return { number: null, source: 'none' };
+}
+
+/**
+ * Le avisa al repartidor que un pedido está listo, con los datos que haya
+ * disponibles. Si no hay ningún número disponible (ni por tenant ni por
+ * env var), se loguea y no se hace nada — a diferencia de los chequeos de
+ * auth del webhook, acá no hay motivo para fallar cerrado (no es una
+ * superficie de ataque, es simplemente una notificación que puede no estar
+ * configurada todavía).
  */
 export async function notifyDeliveryPerson(record: RecordRow): Promise<void> {
-  if (!DELIVERY_WHATSAPP_NUMBER) {
-    console.warn('⚠️ DELIVERY_WHATSAPP_NUMBER no configurado: no se notifica al repartidor de que el pedido', record.id, 'está listo.');
+  const { number, source } = await resolveDeliveryNumber(record.tenant_id);
+
+  if (!number) {
+    console.warn('⚠️ Sin número de repartidor configurado (ni por tenant ni por env var): no se notifica de que el pedido', record.id, 'está listo.');
     return;
+  }
+
+  if (source === 'env') {
+    console.warn(`⚠️ Tenant ${record.tenant_id} sin delivery_whatsapp_number propio — usando el fallback global DELIVERY_WHATSAPP_NUMBER para el pedido ${record.id}. Conviene migrarlo desde el panel de cliente.`);
   }
 
   const mensaje = armarMensajeRepartidor(record);
 
   try {
-    await sendWhatsappUnificadoMessage(DELIVERY_WHATSAPP_NUMBER, mensaje);
+    await sendWhatsappUnificadoMessage(number, mensaje);
   } catch (error) {
     // Un fallo notificando al repartidor no debe impedir que el pedido
     // quede marcado como "ready" — el status ya se guardó antes de llamar
