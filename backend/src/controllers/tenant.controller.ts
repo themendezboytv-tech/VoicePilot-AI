@@ -48,16 +48,19 @@ export const createTenant = async (req: Request, res: Response): Promise<void> =
   }
 };
 
+const TENANT_COLUMNS = `id, name, slug, plan, is_active, business_type, account_status, delivery_whatsapp_number, created_at`;
+
 /**
- * Obtiene la lista de todas las empresas registradas
+ * Devuelve la empresa del usuario autenticado (req.user.tenant_id).
+ * Antes devolvía TODAS las empresas sin ningún filtro — hueco de
+ * autorización cerrado al agregar requireAuth (ver tenant.routes.ts).
  * Método: GET /api/tenants
  */
 export const getTenants = async (req: Request, res: Response): Promise<void> => {
   try {
     const result = await dbPool.query(
-      `SELECT id, name, slug, plan, is_active, created_at 
-       FROM tenants 
-       ORDER BY created_at DESC`
+      `SELECT ${TENANT_COLUMNS} FROM tenants WHERE id = $1`,
+      [req.user!.tenant_id]
     );
 
     res.status(200).json({
@@ -66,5 +69,90 @@ export const getTenants = async (req: Request, res: Response): Promise<void> => 
     });
   } catch (error) {
     respondToDbError(error, res, 'Error interno del servidor al consultar empresas');
+  }
+};
+
+/**
+ * Obtiene el detalle de una empresa puntual por :id, solo si es la del
+ * usuario autenticado. Se responde 404 (no 403) ante un id de otro tenant,
+ * para no revelar que ese id existe (mismo criterio que records).
+ * Método: GET /api/tenants/:id
+ */
+export const getTenantById = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+
+    if (id !== req.user!.tenant_id) {
+      res.status(404).json({ error: 'Empresa no encontrada' });
+      return;
+    }
+
+    const result = await dbPool.query(`SELECT ${TENANT_COLUMNS} FROM tenants WHERE id = $1`, [id]);
+
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: 'Empresa no encontrada' });
+      return;
+    }
+
+    res.status(200).json({ data: result.rows[0] });
+  } catch (error) {
+    respondToDbError(error, res, 'Error interno del servidor al consultar la empresa');
+  }
+};
+
+// Campos editables desde el panel de cliente. A propósito NO incluye slug,
+// plan, is_active ni account_status — son datos de administración/negocio
+// que hoy no se autoservéan (is_active/account_status van a depender de
+// "VoicePilot Admin" a futuro, ver CLAUDE.md).
+const TENANT_EDITABLE_FIELDS = ['name', 'business_type', 'delivery_whatsapp_number'] as const;
+
+/**
+ * Actualiza datos editables de la propia empresa (Ajustes de cuenta /
+ * Configuración del asistente en el panel). Solo permite tocar la empresa
+ * del usuario autenticado.
+ * Método: PATCH /api/tenants/:id
+ * Body: cualquier subconjunto de TENANT_EDITABLE_FIELDS
+ */
+export const updateTenant = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+
+    if (id !== req.user!.tenant_id) {
+      res.status(404).json({ error: 'Empresa no encontrada' });
+      return;
+    }
+
+    const setClauses: string[] = [];
+    const params: any[] = [];
+
+    for (const field of TENANT_EDITABLE_FIELDS) {
+      if (field in req.body) {
+        params.push(req.body[field]);
+        setClauses.push(`${field} = $${params.length}`);
+      }
+    }
+
+    if (setClauses.length === 0) {
+      res.status(400).json({ error: `No enviaste ningún campo editable. Válidos: ${TENANT_EDITABLE_FIELDS.join(', ')}` });
+      return;
+    }
+
+    params.push(id);
+    const result = await dbPool.query(
+      `UPDATE tenants SET ${setClauses.join(', ')} WHERE id = $${params.length} RETURNING ${TENANT_COLUMNS}`,
+      params
+    );
+
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: 'Empresa no encontrada' });
+      return;
+    }
+
+    res.status(200).json({
+      message: 'Empresa actualizada exitosamente',
+      data: result.rows[0]
+    });
+  } catch (error) {
+    respondToDbError(error, res, 'Error interno del servidor al actualizar la empresa');
   }
 };

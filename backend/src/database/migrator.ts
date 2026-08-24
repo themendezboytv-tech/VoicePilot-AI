@@ -81,6 +81,34 @@ export async function runMigrations(): Promise<void> {
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- TABLA USERS: usuarios humanos del panel de cliente (no confundir con
+    -- "contactos" de records, que son clientes finales del negocio). Un
+    -- usuario pertenece a un solo tenant.
+    CREATE TABLE IF NOT EXISTS users (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        -- 'owner': dueño de la cuenta (único con acceso a Ajustes de cuenta
+        -- a futuro). 'staff': acceso operativo (dashboard, registros), sin
+        -- poder editar configuración del asistente ni usuarios.
+        role VARCHAR(20) NOT NULL DEFAULT 'staff',
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- TABLA REFRESH_TOKENS: nunca se guarda el token en texto plano, solo su
+    -- hash (SHA-256) — igual que password_hash, para que un dump de la DB no
+    -- alcance para robar sesiones. Rotado en cada uso (ver auth.service.ts).
+    CREATE TABLE IF NOT EXISTS refresh_tokens (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        token_hash VARCHAR(64) NOT NULL,
+        expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        revoked_at TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Parche de columnas por si la base de datos existía previa a este cambio
     ALTER TABLE tenants ADD COLUMN IF NOT EXISTS slug VARCHAR(255) UNIQUE;
     ALTER TABLE tenants ADD COLUMN IF NOT EXISTS plan VARCHAR(50) DEFAULT 'basic';
@@ -88,6 +116,16 @@ export async function runMigrations(): Promise<void> {
     -- Vertical de negocio del tenant (restaurant, barbershop, ...). Solo
     -- metadata para reportes/onboarding por ahora, no bifurca ningún código.
     ALTER TABLE tenants ADD COLUMN IF NOT EXISTS business_type VARCHAR(50);
+    -- Estado de la cuenta para el registro público (POST /api/auth/register):
+    -- toda cuenta nueva nace en 'demo'. Por ahora es solo informativo/visible
+    -- en la tabla — no bloquea ninguna funcionalidad todavía; el día que
+    -- exista "VoicePilot Admin" para aprobar cuentas manualmente, ahí se
+    -- decide qué gatear según este valor (ver CLAUDE.md).
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS account_status VARCHAR(20) NOT NULL DEFAULT 'demo';
+    -- Contacto de WhatsApp del repartidor/staff que recibe la notificación de
+    -- pedido listo (ver order-notifications.service.ts). Reemplaza el env var
+    -- global DELIVERY_WHATSAPP_NUMBER una vez que el panel lo puede editar.
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS delivery_whatsapp_number VARCHAR(50);
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS system_prompt TEXT;
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS greeting_message TEXT;
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS voice_id VARCHAR(100) DEFAULT 'default';
@@ -96,6 +134,12 @@ export async function runMigrations(): Promise<void> {
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS telephony_provider VARCHAR(50) DEFAULT 'twilio';
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS captures_records BOOLEAN DEFAULT false;
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS default_record_type VARCHAR(50) DEFAULT 'order';
+    -- Precios/servicios y horarios de atención, editables desde la página
+    -- "Configuración del asistente" del panel. Formato libre (JSONB) porque
+    -- varía por vertical de negocio (menú de restaurante vs. servicios de
+    -- peluquería vs. ...) — mismo criterio que records.data.
+    ALTER TABLE assistants ADD COLUMN IF NOT EXISTS pricing_info JSONB DEFAULT '{}';
+    ALTER TABLE assistants ADD COLUMN IF NOT EXISTS business_hours JSONB DEFAULT '{}';
     ALTER TABLE calls ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE;
     ALTER TABLE calls ADD COLUMN IF NOT EXISTS caller_number VARCHAR(50);
     ALTER TABLE calls ADD COLUMN IF NOT EXISTS call_sid VARCHAR(64);
@@ -115,10 +159,15 @@ export async function runMigrations(): Promise<void> {
     ALTER TABLE records ADD COLUMN IF NOT EXISTS data JSONB DEFAULT '{}';
     ALTER TABLE records ADD COLUMN IF NOT EXISTS notes TEXT;
     ALTER TABLE records ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'staff';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;
 
     CREATE INDEX IF NOT EXISTS idx_calls_call_sid ON calls(call_sid);
     CREATE INDEX IF NOT EXISTS idx_records_tenant ON records(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_records_interaction ON records(interaction_id);
+    CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id);
+    CREATE INDEX IF NOT EXISTS idx_refresh_tokens_hash ON refresh_tokens(token_hash);
     -- Soporta el chequeo de continuidad entre canales: "¿este contacto tiene
     -- un registro abierto reciente?" sin filtrar por channel a propósito, para
     -- que una conversación de voz pueda continuar un registro abierto por
