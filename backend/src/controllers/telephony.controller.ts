@@ -253,6 +253,21 @@ export const handleSpeechResult = async (req: Request, res: Response): Promise<v
       recordData = extracted.recordData;
     }
 
+    // La fila de calls de este turno se inserta ACÁ (antes de crear el
+    // record, no al final como antes) para poder pasarle su id como
+    // interaction_id — mismo criterio que ya usa conversation.service.ts
+    // (WhatsApp/texto). Antes de este cambio, los records creados por voz
+    // quedaban con interaction_id vacío, sin forma confiable de linkear
+    // "esta llamada" con "el record que generó".
+    const transcript = `Cliente: ${speech.speechResult} - Asistente: ${spokenReply}`;
+    const callRowResult = await dbPool.query(
+      `INSERT INTO calls (tenant_id, assistant_id, caller_number, call_sid, duration_seconds, status, transcript)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id`,
+      [assistant.tenant_id, assistant.id, speech.from, speech.callSid, 0, 'in-progress', transcript]
+    );
+    const callRowId = callRowResult.rows[0].id;
+
     if (recordData) {
       try {
         if (pendingContinuity) {
@@ -264,6 +279,7 @@ export const handleSpeechResult = async (req: Request, res: Response): Promise<v
             await createRecord({
               tenantId: assistant.tenant_id,
               assistantId: assistant.id,
+              interactionId: callRowId,
               recordType: recordData.record_type || assistant.default_record_type || 'order',
               channel: 'voice',
               contactIdentifier: speech.from,
@@ -294,6 +310,7 @@ export const handleSpeechResult = async (req: Request, res: Response): Promise<v
             await createRecord({
               tenantId: assistant.tenant_id,
               assistantId: assistant.id,
+              interactionId: callRowId,
               recordType: recordData.record_type || assistant.default_record_type || 'order',
               channel: 'voice',
               contactIdentifier: speech.from,
@@ -309,13 +326,6 @@ export const handleSpeechResult = async (req: Request, res: Response): Promise<v
     }
 
     await saveChatHistory(sessionId, speech.speechResult, spokenReply);
-
-    const transcript = `Cliente: ${speech.speechResult} - Asistente: ${spokenReply}`;
-    await dbPool.query(
-      `INSERT INTO calls (tenant_id, assistant_id, caller_number, call_sid, duration_seconds, status, transcript)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [assistant.tenant_id, assistant.id, speech.from, speech.callSid, 0, 'in-progress', transcript]
-    );
 
     const nextGatherUrl = `${baseGatherPath}&turn=${turn + 1}&call_started_at=${callStartedAt}`;
     const response = provider.buildReplyResponse(spokenReply, nextGatherUrl);
