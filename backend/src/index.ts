@@ -17,6 +17,7 @@ import callRoutes from './routes/call.routes';
 import recordRoutes from './routes/record.routes';
 import aiRoutes from './routes/ai.routes';
 import telephonyRoutes from './routes/telephony.routes';
+import whatsappRoutes from './routes/whatsapp.routes';
 
 dotenv.config();
 
@@ -43,6 +44,7 @@ app.use('/api/calls', callRoutes);
 app.use('/api/records', recordRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/telephony', telephonyRoutes);
+app.use('/api/whatsapp', whatsappRoutes);
 
 app.get('/health', (req: Request, res: Response) => {
   res.status(200).json({
