@@ -19,6 +19,8 @@ import aiRoutes from './routes/ai.routes';
 import telephonyRoutes from './routes/telephony.routes';
 import whatsappRoutes from './routes/whatsapp.routes';
 import authRoutes from './routes/auth.routes';
+import adminAuthRoutes from './routes/admin-auth.routes';
+import adminTenantRoutes from './routes/admin-tenants.routes';
 
 dotenv.config();
 
@@ -40,6 +42,10 @@ app.use(express.urlencoded({ extended: false }));
  * Rutas de la API REST
  */
 app.use('/api/auth', authRoutes);
+// Namespace de VoicePilot Admin — completamente separado de /api/auth y
+// /api/tenants (cliente). Ver docs/design-voicepilot-admin.md.
+app.use('/api/admin/auth', adminAuthRoutes);
+app.use('/api/admin/tenants', adminTenantRoutes);
 app.use('/api/tenants', tenantRoutes);
 app.use('/api/assistants', assistantRoutes);
 app.use('/api/calls', callRoutes);

@@ -10,7 +10,9 @@
     "test:e2e:ai-chat": "tsx scripts/e2e-ai-chat.ts",
     "test:e2e:records": "tsx scripts/e2e-records-notifications.ts",
     "test:e2e:auth": "tsx scripts/e2e-auth.ts",
-    "test:e2e:down": "docker compose -f docker-compose.test.yml down"
+    "test:e2e:admin": "tsx scripts/e2e-admin.ts",
+    "test:e2e:down": "docker compose -f docker-compose.test.yml down",
+    "seed:superadmin": "tsx scripts/seed-superadmin.ts"
   },
   "keywords": [
     "voicepilot",
