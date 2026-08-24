@@ -28,6 +28,11 @@
 // estático de código de la app (ver "Import dinámico" más abajo y la
 // trampa documentada en CLAUDE.md sobre hoisting de imports). Este script
 // jamás toca alpha_database/alpha_cache ni el proceso real whatsapp-unificado.
+//
+// Nota (post-merge de feat/customer-panel-auth): /api/records ahora exige
+// requireAuth. En vez de loguearse por HTTP, se firma un JWT directo con
+// signAccessToken() para cada tenant sembrado — más rápido y evita tener
+// que sembrar también un usuario con password real solo para este test.
 // ==============================================================================
 
 import { execSync } from 'child_process';
@@ -53,6 +58,10 @@ process.env.NODE_ENV = 'test';
 // no-op — el valor exacto no importa, solo tiene que ser truthy.
 process.env.DELIVERY_WHATSAPP_NUMBER = '+10000000099';
 process.env.WHATSAPP_UNIFICADO_SECRET = 'test-secret';
+// requireAuth (auth.middleware.ts) necesita esto para firmar/verificar los
+// JWT que este script genera directo con signAccessToken(), sin pasar por
+// un login HTTP real.
+process.env.JWT_SECRET = 'e2e-records-test-secret-no-usar-en-produccion';
 // Se completa más abajo, una vez que sabemos en qué puerto quedó el mock.
 process.env.WHATSAPP_UNIFICADO_URL = '';
 
@@ -148,6 +157,7 @@ async function main(): Promise<void> {
   const { redisClient } = await import('../src/config/redis');
   const { runMigrations } = await import('../src/database/migrator');
   const { estimateWaitMinutes } = await import('../src/services/order-notifications.service');
+  const { signAccessToken } = await import('../src/services/auth.service');
   const recordRoutes = (await import('../src/routes/record.routes')).default;
   const express = (await import('express')).default;
 
@@ -187,6 +197,12 @@ async function main(): Promise<void> {
   const tenantId = await seedTenant('');
   const otherTenantId = await seedTenant('-b');
 
+  // Tokens firmados directo (sin usuario/password real) — este script solo
+  // necesita pasar requireAuth, no probar el login en sí (eso ya lo cubre
+  // scripts/e2e-auth.ts).
+  const authToken = signAccessToken({ sub: 'e2e-user', tenant_id: tenantId, role: 'owner', email: 'e2e@test.local' });
+  const authHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` };
+
   const app = express();
   app.use(express.json());
   app.use(express.urlencoded({ extended: false }));
@@ -208,7 +224,7 @@ async function main(): Promise<void> {
     const contactIdentifier = '+50600000001';
     const createRes = await fetch(`${baseUrl}/api/records`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({
         tenant_id: tenantId,
         record_type: 'order',
@@ -226,7 +242,7 @@ async function main(): Promise<void> {
     // --- Caso 2: continuidad — mismo contacto, sin force_new, dentro de la ventana ---
     const continuityRes = await fetch(`${baseUrl}/api/records`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({
         tenant_id: tenantId,
         record_type: 'order',
@@ -243,7 +259,7 @@ async function main(): Promise<void> {
     // --- Caso 3: force_new salta la continuidad a propósito ---
     const forceNewRes = await fetch(`${baseUrl}/api/records`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({
         tenant_id: tenantId,
         record_type: 'order',
@@ -270,7 +286,7 @@ async function main(): Promise<void> {
     await dbPool.query(`UPDATE records SET updated_at = NOW() - INTERVAL '4 hours' WHERE id = $1`, [secondRecordId]);
     const expiredWindowRes = await fetch(`${baseUrl}/api/records`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({
         tenant_id: tenantId,
         record_type: 'order',
@@ -285,7 +301,7 @@ async function main(): Promise<void> {
     // --- Caso 5: status inválido ---
     const invalidStatusRes = await fetch(`${baseUrl}/api/records/${recordId}/status`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({ status: 'no_existe' })
     });
     assert(invalidStatusRes.status === 400, `PATCH status inválido devuelve 400 (recibido: ${invalidStatusRes.status})`);
@@ -293,7 +309,7 @@ async function main(): Promise<void> {
     // --- Caso 6: status='in_progress' NO dispara notificación al repartidor ---
     const inProgressRes = await fetch(`${baseUrl}/api/records/${recordId}/status`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({ status: 'in_progress' })
     });
     assert(inProgressRes.status === 200, `PATCH status=in_progress responde 200 (recibido: ${inProgressRes.status})`);
@@ -304,7 +320,7 @@ async function main(): Promise<void> {
     // --- Caso 7: status='ready' SÍ dispara notifyDeliveryPerson() ---
     const readyRes = await fetch(`${baseUrl}/api/records/${recordId}/status`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({ status: 'ready' })
     });
     const readyBody = await readyRes.json();
@@ -323,14 +339,47 @@ async function main(): Promise<void> {
     // --- Caso 8: un segundo PATCH a ready sobre OTRO record no reusa la misma notificación ---
     await fetch(`${baseUrl}/api/records/${secondRecordId}/status`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({ status: 'ready' })
     });
     const notifiedTwice = await waitFor(() => mockWhatsapp.received.length === 2);
     assert(notifiedTwice, 'Un segundo record marcado ready dispara una segunda notificación independiente');
 
+    // --- Caso 8.5: si el tenant tiene su propio delivery_whatsapp_number,
+    // se usa ESE en vez del fallback global DELIVERY_WHATSAPP_NUMBER (ver
+    // resolveDeliveryNumber en order-notifications.service.ts) ---
+    const tenantOwnNumber = '+50699999999';
+    await dbPool.query(`UPDATE tenants SET delivery_whatsapp_number = $1 WHERE id = $2`, [tenantOwnNumber, tenantId]);
+
+    const thirdRecordRes = await fetch(`${baseUrl}/api/records`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({
+        record_type: 'order',
+        contact_identifier: '+50600000002',
+        force_new: true,
+        data: { items: ['pedido con repartidor propio del tenant'] }
+      })
+    });
+    const thirdRecordBody = await thirdRecordRes.json();
+    const thirdRecordId = thirdRecordBody.data.id;
+
+    await fetch(`${baseUrl}/api/records/${thirdRecordId}/status`, {
+      method: 'PATCH',
+      headers: authHeaders,
+      body: JSON.stringify({ status: 'ready' })
+    });
+    const notifiedThrice = await waitFor(() => mockWhatsapp.received.length === 3);
+    assert(notifiedThrice, 'Record con delivery_whatsapp_number propio del tenant también dispara notificación');
+    assert(
+      mockWhatsapp.received[2].telefono === tenantOwnNumber,
+      `La notificación usa el número PROPIO del tenant, no el fallback de env var (recibido: ${mockWhatsapp.received[2].telefono})`
+    );
+
     // --- Caso 9: 404 sobre un record inexistente ---
-    const notFoundRes = await fetch(`${baseUrl}/api/records/00000000-0000-0000-0000-000000000000`);
+    const notFoundRes = await fetch(`${baseUrl}/api/records/00000000-0000-0000-0000-000000000000`, {
+      headers: authHeaders
+    });
     assert(notFoundRes.status === 404, `GET de un record inexistente devuelve 404 (recibido: ${notFoundRes.status})`);
 
     // El record del caso 4 (ventana expirada) quedó en status='received'
