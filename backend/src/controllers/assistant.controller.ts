@@ -14,12 +14,16 @@ import { respondToDbError } from '../utils/db-errors';
  */
 export const createAssistant = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { tenant_id, name, system_prompt, greeting_message, voice_id, phone_number, ai_provider, telephony_provider } = req.body;
+    const { name, system_prompt, greeting_message, voice_id, phone_number, ai_provider, telephony_provider } = req.body;
+    // tenant_id sale del token, no del body: si no, cualquier usuario
+    // autenticado podría crear un asistente para otro tenant con solo
+    // cambiar el campo en la request.
+    const tenant_id = req.user!.tenant_id;
 
     // Validación básica: Necesitamos saber a qué empresa pertenece y sus instrucciones
-    if (!tenant_id || !name || !system_prompt || !greeting_message) {
+    if (!name || !system_prompt || !greeting_message) {
       res.status(400).json({
-        error: 'Faltan campos obligatorios (tenant_id, name, system_prompt, greeting_message)'
+        error: 'Faltan campos obligatorios (name, system_prompt, greeting_message)'
       });
       return;
     }
@@ -51,23 +55,18 @@ export const createAssistant = async (req: Request, res: Response): Promise<void
 };
 
 /**
- * Obtiene la lista de asistentes (puede filtrar por empresa)
- * Método: GET /api/assistants?tenant_id=UUID
+ * Obtiene la lista de asistentes de la empresa autenticada. Antes aceptaba
+ * ?tenant_id= de cualquiera y, sin ese parámetro, devolvía los asistentes de
+ * TODAS las empresas — hueco de autorización cerrado al agregar requireAuth
+ * y forzar el filtro por req.user.tenant_id (ver assistant.routes.ts).
+ * Método: GET /api/assistants
  */
 export const getAssistants = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { tenant_id } = req.query; // Capturamos si nos envían un ID de empresa por la URL
-
-    let query = `SELECT * FROM assistants ORDER BY created_at DESC`;
-    let params: any[] = [];
-
-    // Si nos pasan un tenant_id, filtramos para mostrar solo los bots de esa empresa
-    if (tenant_id) {
-      query = `SELECT * FROM assistants WHERE tenant_id = $1 ORDER BY created_at DESC`;
-      params = [tenant_id];
-    }
-
-    const result = await dbPool.query(query, params);
+    const result = await dbPool.query(
+      `SELECT * FROM assistants WHERE tenant_id = $1 ORDER BY created_at DESC`,
+      [req.user!.tenant_id]
+    );
 
     res.status(200).json({
       total: result.rowCount,

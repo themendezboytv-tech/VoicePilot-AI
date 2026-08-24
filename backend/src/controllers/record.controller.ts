@@ -29,7 +29,6 @@ const VALID_STATUSES = ['received', 'in_progress', 'ready', 'completed', 'cancel
 export const createRecord = async (req: Request, res: Response): Promise<void> => {
   try {
     const {
-      tenant_id,
       assistant_id,
       interaction_id,
       record_type,
@@ -40,11 +39,14 @@ export const createRecord = async (req: Request, res: Response): Promise<void> =
       notes,
       force_new
     } = req.body;
+    // tenant_id sale del token, no del body (ver mismo criterio en
+    // assistant.controller.ts): evita que un usuario cree records para
+    // otro tenant con solo cambiar el campo en la request.
+    const tenant_id = req.user!.tenant_id;
 
-    // Validación básica: sin tenant y sin saber qué tipo de record es, no
-    // hay nada que guardar.
-    if (!tenant_id || !record_type) {
-      res.status(400).json({ error: 'Los campos tenant_id y record_type son obligatorios' });
+    // Validación básica: sin saber qué tipo de record es, no hay nada que guardar.
+    if (!record_type) {
+      res.status(400).json({ error: 'El campo record_type es obligatorio' });
       return;
     }
 
@@ -89,23 +91,20 @@ export const createRecord = async (req: Request, res: Response): Promise<void> =
 };
 
 /**
- * Lista los records de una empresa, con filtros opcionales por status,
- * channel y record_type.
- * Método: GET /api/records?tenant_id=UUID&status=...&channel=...&record_type=...
+ * Lista los records de la empresa autenticada, con filtros opcionales por
+ * status, channel y record_type. Antes aceptaba cualquier ?tenant_id= de la
+ * URL sin verificar que fuera del que hace la request — hueco de
+ * autorización cerrado al forzar el filtro por req.user.tenant_id.
+ * Método: GET /api/records?status=...&channel=...&record_type=...
  */
 export const getRecords = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { tenant_id, status, channel, record_type } = req.query;
-
-    if (!tenant_id) {
-      res.status(400).json({ error: 'Debes proporcionar un tenant_id válido en la URL' });
-      return;
-    }
+    const { status, channel, record_type } = req.query;
 
     // Arma el WHERE dinámicamente según los filtros opcionales presentes,
     // manteniendo todo parametrizado.
     const conditions: string[] = ['tenant_id = $1'];
-    const params: any[] = [tenant_id];
+    const params: any[] = [req.user!.tenant_id];
 
     if (status) {
       params.push(status);
@@ -137,14 +136,21 @@ export const getRecords = async (req: Request, res: Response): Promise<void> => 
 };
 
 /**
- * Obtiene un Record puntual por su id.
+ * Obtiene un Record puntual por su id, solo si pertenece a la empresa
+ * autenticada. Antes devolvía cualquier record por id sin chequear tenant —
+ * cualquier usuario logueado podía leer pedidos de otro negocio adivinando
+ * (o iterando) UUIDs. Se responde 404 en vez de 403 ante un tenant distinto
+ * para no revelar que el id existe.
  * Método: GET /api/records/:id
  */
 export const getRecordById = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
 
-    const result = await dbPool.query('SELECT * FROM records WHERE id = $1', [id]);
+    const result = await dbPool.query(
+      'SELECT * FROM records WHERE id = $1 AND tenant_id = $2',
+      [id, req.user!.tenant_id]
+    );
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Record no encontrado' });
@@ -159,7 +165,8 @@ export const getRecordById = async (req: Request, res: Response): Promise<void> 
 
 /**
  * Actualiza el status de un Record (ej. received -> in_progress -> ready ->
- * completed, o cancelled en cualquier punto del ciclo).
+ * completed, o cancelled en cualquier punto del ciclo), solo si pertenece a
+ * la empresa autenticada (mismo criterio que getRecordById).
  * Método: PATCH /api/records/:id/status
  */
 export const updateRecordStatus = async (req: Request, res: Response): Promise<void> => {
@@ -180,8 +187,8 @@ export const updateRecordStatus = async (req: Request, res: Response): Promise<v
     }
 
     const result = await dbPool.query(
-      `UPDATE records SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
-      [status, id]
+      `UPDATE records SET status = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3 RETURNING *`,
+      [status, id, req.user!.tenant_id]
     );
 
     if (result.rows.length === 0) {

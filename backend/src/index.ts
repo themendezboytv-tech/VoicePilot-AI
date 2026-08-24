@@ -17,6 +17,7 @@ import callRoutes from './routes/call.routes';
 import recordRoutes from './routes/record.routes';
 import aiRoutes from './routes/ai.routes';
 import telephonyRoutes from './routes/telephony.routes';
+import authRoutes from './routes/auth.routes';
 
 dotenv.config();
 
@@ -37,6 +38,7 @@ app.use(express.urlencoded({ extended: false }));
 /**
  * Rutas de la API REST
  */
+app.use('/api/auth', authRoutes);
 app.use('/api/tenants', tenantRoutes);
 app.use('/api/assistants', assistantRoutes);
 app.use('/api/calls', callRoutes);

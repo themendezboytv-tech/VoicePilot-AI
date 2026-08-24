@@ -14,10 +14,11 @@ import { respondToDbError } from '../utils/db-errors';
  */
 export const registerCall = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { tenant_id, assistant_id, caller_number, duration_seconds, status, transcript } = req.body;
+    const { assistant_id, caller_number, duration_seconds, status, transcript } = req.body;
+    const tenant_id = req.user!.tenant_id;
 
-    if (!tenant_id || !assistant_id) {
-      res.status(400).json({ error: 'Faltan campos obligatorios (tenant_id, assistant_id)' });
+    if (!assistant_id) {
+      res.status(400).json({ error: 'Falta el campo obligatorio assistant_id' });
       return;
     }
 
@@ -45,22 +46,17 @@ export const registerCall = async (req: Request, res: Response): Promise<void> =
 };
 
 /**
- * Obtiene el historial de llamadas de una empresa específica
- * Método: GET /api/calls?tenant_id=UUID
+ * Obtiene el historial de llamadas de la empresa autenticada. Antes
+ * aceptaba cualquier ?tenant_id= de la URL sin verificarlo — hueco de
+ * autorización cerrado al forzar el filtro por req.user.tenant_id.
+ * Método: GET /api/calls
  */
 export const getCallLogs = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { tenant_id } = req.query;
-
-    if (!tenant_id) {
-      res.status(400).json({ error: 'Debes proporcionar un tenant_id válido en la URL' });
-      return;
-    }
-
     // Buscamos las llamadas de esa empresa, ordenadas de la más reciente a la más antigua
     const result = await dbPool.query(
       `SELECT * FROM calls WHERE tenant_id = $1 ORDER BY created_at DESC`,
-      [tenant_id]
+      [req.user!.tenant_id]
     );
 
     res.status(200).json({

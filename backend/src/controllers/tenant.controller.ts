@@ -49,15 +49,18 @@ export const createTenant = async (req: Request, res: Response): Promise<void> =
 };
 
 /**
- * Obtiene la lista de todas las empresas registradas
+ * Devuelve la empresa del usuario autenticado (req.user.tenant_id).
+ * Antes devolvía TODAS las empresas sin ningún filtro — hueco de
+ * autorización cerrado al agregar requireAuth (ver tenant.routes.ts).
  * Método: GET /api/tenants
  */
 export const getTenants = async (req: Request, res: Response): Promise<void> => {
   try {
     const result = await dbPool.query(
-      `SELECT id, name, slug, plan, is_active, created_at 
-       FROM tenants 
-       ORDER BY created_at DESC`
+      `SELECT id, name, slug, plan, is_active, created_at
+       FROM tenants
+       WHERE id = $1`,
+      [req.user!.tenant_id]
     );
 
     res.status(200).json({

@@ -81,6 +81,34 @@ export async function runMigrations(): Promise<void> {
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- TABLA USERS: usuarios humanos del panel de cliente (no confundir con
+    -- "contactos" de records, que son clientes finales del negocio). Un
+    -- usuario pertenece a un solo tenant.
+    CREATE TABLE IF NOT EXISTS users (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        -- 'owner': dueño de la cuenta (único con acceso a Ajustes de cuenta
+        -- a futuro). 'staff': acceso operativo (dashboard, registros), sin
+        -- poder editar configuración del asistente ni usuarios.
+        role VARCHAR(20) NOT NULL DEFAULT 'staff',
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- TABLA REFRESH_TOKENS: nunca se guarda el token en texto plano, solo su
+    -- hash (SHA-256) — igual que password_hash, para que un dump de la DB no
+    -- alcance para robar sesiones. Rotado en cada uso (ver auth.service.ts).
+    CREATE TABLE IF NOT EXISTS refresh_tokens (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        token_hash VARCHAR(64) NOT NULL,
+        expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        revoked_at TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Parche de columnas por si la base de datos existía previa a este cambio
     ALTER TABLE tenants ADD COLUMN IF NOT EXISTS slug VARCHAR(255) UNIQUE;
     ALTER TABLE tenants ADD COLUMN IF NOT EXISTS plan VARCHAR(50) DEFAULT 'basic';
@@ -115,10 +143,15 @@ export async function runMigrations(): Promise<void> {
     ALTER TABLE records ADD COLUMN IF NOT EXISTS data JSONB DEFAULT '{}';
     ALTER TABLE records ADD COLUMN IF NOT EXISTS notes TEXT;
     ALTER TABLE records ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'staff';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;
 
     CREATE INDEX IF NOT EXISTS idx_calls_call_sid ON calls(call_sid);
     CREATE INDEX IF NOT EXISTS idx_records_tenant ON records(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_records_interaction ON records(interaction_id);
+    CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id);
+    CREATE INDEX IF NOT EXISTS idx_refresh_tokens_hash ON refresh_tokens(token_hash);
     -- Soporta el chequeo de continuidad entre canales: "¿este contacto tiene
     -- un registro abierto reciente?" sin filtrar por channel a propósito, para
     -- que una conversación de voz pueda continuar un registro abierto por
