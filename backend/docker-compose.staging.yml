@@ -1,0 +1,51 @@
+# ==============================================================================
+# ARCHIVO DE INFRAESTRUCTURA: Docker Compose (STAGING)
+# Proyecto: VoicePilot AI
+# Descripción: Postgres + Redis para probar el panel de cliente y VoicePilot
+# Admin de punta a punta antes de tocar producción. A diferencia de
+# docker-compose.test.yml (efímero, sin volumen, pensado para correrse y
+# tirarse en cada test automatizado), esto SÍ tiene volumen — persiste
+# entre reinicios — pero está completamente separado de alpha_database/
+# alpha_cache (producción): otro nombre de contenedor, otro puerto, otras
+# credenciales, otro volumen. Se puede bajar y recrear con
+# `docker compose -f docker-compose.staging.yml down -v` sin afectar a
+# nadie más — no tiene (ni va a tener) datos reales de clientes.
+# Igual que producción, publica solo en 127.0.0.1 (no en 0.0.0.0): nada de
+# esto tiene que ser alcanzable desde fuera del propio host.
+# ==============================================================================
+
+services:
+  postgres_staging:
+    image: postgres:15-alpine
+    container_name: alpha_staging_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: voicepilot_staging
+      POSTGRES_USER: staging
+      POSTGRES_PASSWORD: ${STAGING_DB_PASSWORD}
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - staging_db_data:/var/lib/postgresql/data
+    networks:
+      - voicepilot_staging_network
+
+  redis_staging:
+    image: redis:7-alpine
+    container_name: alpha_staging_cache
+    restart: unless-stopped
+    command: redis-server --requirepass ${STAGING_REDIS_PASSWORD}
+    ports:
+      - "127.0.0.1:6381:6379"
+    volumes:
+      - staging_cache_data:/data
+    networks:
+      - voicepilot_staging_network
+
+volumes:
+  staging_db_data:
+  staging_cache_data:
+
+networks:
+  voicepilot_staging_network:
+    driver: bridge
