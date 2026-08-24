@@ -17,8 +17,46 @@ import {
   generateRefreshToken,
   hashRefreshToken
 } from '../services/auth.service';
+import { checkRateLimit, registerAttempt, clearRateLimit } from '../services/rate-limit.service';
 
 const MIN_PASSWORD_LENGTH = 8;
+
+// --- Rate limiting de /api/auth/login ---
+// Dos contadores independientes, ambos tienen que estar "libres" para dejar
+// intentar el login:
+//   - Por IP: frena a alguien probando contraseñas contra MUCHAS cuentas
+//     distintas desde una sola conexión (credential stuffing).
+//   - Por cuenta+IP (no solo por cuenta): frena la fuerza bruta contra UNA
+//     cuenta puntual, pero a propósito NO cuenta solo por email — si
+//     contara solo por email, cualquiera que conociera el email de un
+//     cliente podría fallar el login a propósito una y otra vez y dejarlo
+//     bloqueado indefinidamente sin necesitar su contraseña (denegación de
+//     servicio contra esa cuenta). Combinando email+IP, un atacante que
+//     falla repetidas veces solo se bloquea a sí mismo desde su propia
+//     conexión — el cliente real, entrando desde la suya, nunca se ve
+//     afectado por lo que haga otra IP.
+const LOGIN_IP_LIMIT = 10;
+const LOGIN_IP_WINDOW_SECONDS = 15 * 60;
+const LOGIN_ACCOUNT_LIMIT = 5;
+const LOGIN_ACCOUNT_WINDOW_SECONDS = 15 * 60;
+
+const loginIpKey = (ip: string) => `rl:login:ip:${ip}`;
+const loginAccountKey = (email: string, ip: string) => `rl:login:acct:${email.toLowerCase()}:${ip}`;
+
+// --- Rate limiting de /api/auth/register ---
+// Un solo contador por IP: no hay "contraseña" que adivinar acá, el
+// objetivo es solo evitar que un script cree cuentas demo en cadena desde
+// una sola máquina. No frena un ataque distribuido (muchas IPs) — para eso
+// hace falta CAPTCHA o verificación de email, deliberadamente diferido.
+const REGISTER_IP_LIMIT = 5;
+const REGISTER_IP_WINDOW_SECONDS = 60 * 60;
+
+const registerIpKey = (ip: string) => `rl:register:ip:${ip}`;
+
+function tooManyRequests(res: Response, retryAfterSeconds: number, message: string): void {
+  res.set('Retry-After', String(retryAfterSeconds));
+  res.status(429).json({ error: message });
+}
 
 /**
  * Genera un slug URL-friendly a partir del nombre del negocio (minúsculas,
@@ -57,6 +95,17 @@ interface UserRow {
  * pueda loguear al usuario automáticamente después de registrarse.
  */
 export const register = async (req: Request, res: Response): Promise<void> => {
+  const ipKey = registerIpKey(req.ip || 'sin-ip');
+  const ipStatus = await checkRateLimit(ipKey, REGISTER_IP_LIMIT);
+  if (ipStatus.blocked) {
+    tooManyRequests(res, ipStatus.retryAfterSeconds, 'Demasiados registros desde esta conexión. Probá de nuevo más tarde.');
+    return;
+  }
+  // Se cuenta el intento ANTES de procesar (éxito o error), a propósito:
+  // el límite es sobre "cuántas veces se llamó a este endpoint", no sobre
+  // "cuántos registros fallaron" — no hay nada que adivinar acá.
+  await registerAttempt(ipKey, REGISTER_IP_WINDOW_SECONDS);
+
   const client = await dbPool.connect();
 
   try {
@@ -153,6 +202,24 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    const ip = req.ip || 'sin-ip';
+    const ipKey = loginIpKey(ip);
+    const accountKey = loginAccountKey(email, ip);
+
+    // Se chequean los DOS límites antes de tocar la base de datos — si
+    // cualquiera de los dos ya está tope, ni se molesta en consultar.
+    const ipStatus = await checkRateLimit(ipKey, LOGIN_IP_LIMIT);
+    if (ipStatus.blocked) {
+      tooManyRequests(res, ipStatus.retryAfterSeconds, 'Demasiados intentos de inicio de sesión desde esta conexión. Probá de nuevo en unos minutos.');
+      return;
+    }
+
+    const accountStatus = await checkRateLimit(accountKey, LOGIN_ACCOUNT_LIMIT);
+    if (accountStatus.blocked) {
+      tooManyRequests(res, accountStatus.retryAfterSeconds, 'Demasiados intentos fallidos para esta cuenta desde tu conexión. Probá de nuevo en unos minutos.');
+      return;
+    }
+
     const result = await dbPool.query<UserRow>(
       `SELECT u.id, u.tenant_id, u.email, u.password_hash, u.role, u.is_active,
               t.is_active AS tenant_is_active
@@ -164,27 +231,38 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
     // Mismo mensaje genérico tanto si el email no existe como si la
     // contraseña es incorrecta, para no filtrar qué emails están registrados.
-    const invalidCredentialsResponse = () => {
+    // Además de responder, cuenta como intento fallido para el rate limit.
+    const invalidCredentialsResponse = async () => {
+      await Promise.all([
+        registerAttempt(ipKey, LOGIN_IP_WINDOW_SECONDS),
+        registerAttempt(accountKey, LOGIN_ACCOUNT_WINDOW_SECONDS)
+      ]);
       res.status(401).json({ error: 'Email o contraseña incorrectos' });
     };
 
     if (result.rows.length === 0) {
-      invalidCredentialsResponse();
+      await invalidCredentialsResponse();
       return;
     }
 
     const user = result.rows[0];
 
     if (!user.is_active || !user.tenant_is_active) {
+      // No cuenta como intento fallido de contraseña: es un estado de la
+      // cuenta, no un intento de adivinar credenciales.
       res.status(403).json({ error: 'La cuenta está desactivada. Contactá al administrador.' });
       return;
     }
 
     const passwordMatches = await comparePassword(password, user.password_hash);
     if (!passwordMatches) {
-      invalidCredentialsResponse();
+      await invalidCredentialsResponse();
       return;
     }
+
+    // Login correcto: limpia ambos contadores, así un cliente real nunca
+    // se va acercando al límite por el solo hecho de usar la app.
+    await clearRateLimit(ipKey, accountKey);
 
     const accessToken = signAccessToken({
       sub: user.id,

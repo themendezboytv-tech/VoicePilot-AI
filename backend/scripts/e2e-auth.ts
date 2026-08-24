@@ -108,6 +108,11 @@ async function main(): Promise<void> {
 
   const app = express();
   app.use(express.json());
+  // Necesario para que req.ip lea X-Forwarded-For (igual que en producción
+  // detrás del túnel de Cloudflare) — el rate limiting de login/registro
+  // depende de esto, y los tests de abajo simulan distintas IPs con este
+  // header.
+  app.set('trust proxy', true);
   app.use('/api/auth', authRoutes);
   app.use('/api/tenants', tenantRoutes);
   app.use('/api/assistants', assistantRoutes);
@@ -141,6 +146,75 @@ async function main(): Promise<void> {
       body: JSON.stringify({ email: 'no-existe@e2e-test.local', password: 'lo-que-sea' })
     });
     assert(noUserRes.status === 401, `Login con email inexistente devuelve 401 (recibido: ${noUserRes.status})`);
+
+    // ==========================================================================
+    // RATE LIMITING de /api/auth/login y /api/auth/register
+    // ==========================================================================
+
+    const loginAttempt = (email: string, password: string, fakeIp: string) =>
+      fetch(`${baseUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': fakeIp },
+        body: JSON.stringify({ email, password })
+      });
+
+    // --- Límite por cuenta+IP: el atacante se bloquea a sí mismo, no a la víctima ---
+    const attackerIp = '10.0.0.1';
+    const victimIp = '10.0.0.2';
+
+    let lastAttackerRes;
+    for (let i = 0; i < 5; i++) {
+      lastAttackerRes = await loginAttempt(tenantA.email, 'incorrecta', attackerIp);
+    }
+    assert(lastAttackerRes!.status === 401, '5 intentos fallidos seguidos (email+IP del atacante) todavía devuelven 401, no 429');
+
+    const sixthAttackerRes = await loginAttempt(tenantA.email, 'incorrecta', attackerIp);
+    assert(sixthAttackerRes.status === 429, `El 6to intento fallido desde la MISMA IP+cuenta devuelve 429 (recibido: ${sixthAttackerRes.status})`);
+    assert(!!sixthAttackerRes.headers.get('retry-after'), 'La respuesta 429 incluye header Retry-After');
+
+    // La víctima, desde SU propia IP, sigue pudiendo loguearse normal —
+    // esto es lo que se pidió arreglar: nadie puede dejarla afuera de su
+    // cuenta solo sabiendo su email.
+    const victimLoginRes = await loginAttempt(tenantA.email, passwordPlain, victimIp);
+    assert(victimLoginRes.status === 200, `La víctima puede loguearse desde su propia IP pese al ataque contra su cuenta (recibido: ${victimLoginRes.status})`);
+
+    // Ese mismo login exitoso limpia los contadores de (email, victimIp) —
+    // sigue bloqueado el combo (email, attackerIp), que es un par distinto.
+    const attackerStillBlockedRes = await loginAttempt(tenantA.email, 'incorrecta', attackerIp);
+    assert(attackerStillBlockedRes.status === 429, `El atacante sigue bloqueado tras el login exitoso de la víctima (recibido: ${attackerStillBlockedRes.status})`);
+
+    // --- Límite por IP: 10 fallos contra CUALQUIER cuenta desde una sola IP, aunque nunca repita cuenta ---
+    const sprayIp = '10.0.0.3';
+    let lastSprayRes;
+    for (let i = 0; i < 10; i++) {
+      lastSprayRes = await loginAttempt(`no-existe-${i}@e2e-test.local`, 'lo-que-sea', sprayIp);
+    }
+    assert(lastSprayRes!.status === 401, '10 intentos contra 10 cuentas distintas desde la misma IP todavía devuelven 401 (ninguna cuenta individual llegó a su límite)');
+
+    const eleventhSprayRes = await loginAttempt('otra-cuenta-mas@e2e-test.local', 'lo-que-sea', sprayIp);
+    assert(eleventhSprayRes.status === 429, `El intento nº11 desde esa IP devuelve 429 por el límite global de IP (recibido: ${eleventhSprayRes.status})`);
+
+    // --- Límite de /api/auth/register por IP ---
+    const registerIp = '10.0.0.4';
+    const registerAttempt = (suffix: number) =>
+      fetch(`${baseUrl}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': registerIp },
+        body: JSON.stringify({
+          business_name: `Negocio Rate Limit ${runId}-${suffix}`,
+          email: `rl-${runId}-${suffix}@e2e-test.local`,
+          password: passwordPlain
+        })
+      });
+
+    let lastRegisterRes;
+    for (let i = 0; i < 5; i++) {
+      lastRegisterRes = await registerAttempt(i);
+    }
+    assert(lastRegisterRes!.status === 201, 'Los primeros 5 registros desde una IP se crean normalmente (recibido 201)');
+
+    const sixthRegisterRes = await registerAttempt(5);
+    assert(sixthRegisterRes.status === 429, `El 6to registro desde la misma IP en la misma hora devuelve 429 (recibido: ${sixthRegisterRes.status})`);
 
     // --- Login correcto de A y B ---
     const loginA = await (await fetch(`${baseUrl}/api/auth/login`, {
