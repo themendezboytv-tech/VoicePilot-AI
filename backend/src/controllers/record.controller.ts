@@ -11,6 +11,7 @@ import { Request, Response } from 'express';
 import { dbPool } from '../config/database';
 import { respondToDbError } from '../utils/db-errors';
 import { findOpenRecordForContact, createRecord as createRecordInDb } from '../services/record.service';
+import { notifyDeliveryPerson } from '../services/order-notifications.service';
 
 // Statuses válidos del ciclo de vida de un record. Se valida acá (a nivel
 // aplicación) en vez de con un CHECK en la base de datos, siguiendo la
@@ -189,9 +190,19 @@ export const updateRecordStatus = async (req: Request, res: Response): Promise<v
       return;
     }
 
+    const record = result.rows[0];
+
+    // Notificación al repartidor: aditiva, nunca bloquea la respuesta HTTP
+    // ni revierte el cambio de status si falla (ver notifyDeliveryPerson).
+    if (status === 'ready') {
+      notifyDeliveryPerson(record).catch((error) => {
+        console.error('❌ Error inesperado notificando al repartidor:', error);
+      });
+    }
+
     res.status(200).json({
       message: 'Status actualizado exitosamente',
-      data: result.rows[0]
+      data: record
     });
   } catch (error) {
     respondToDbError(error, res, 'Error interno del servidor al actualizar el record');

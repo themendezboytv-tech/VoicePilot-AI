@@ -56,6 +56,12 @@ export interface RunAssistantBrainParams {
   channel: string;
 }
 
+// Qué terminó pasando con el record en este turno, para que el llamador
+// (ej. whatsapp.controller.ts, para la confirmación con tiempo estimado)
+// pueda reaccionar sin tener que reconsultar la DB ni duplicar la lógica
+// de decisión que ya vive acá.
+export type RecordOutcome = 'created' | 'appended' | 'pending' | 'discarded' | null;
+
 export interface RunAssistantBrainResult {
   // Respuesta final que hay que mandarle al contacto (ya sin el bloque de
   // datos estructurados, y con la pregunta de continuidad agregada si
@@ -68,6 +74,13 @@ export interface RunAssistantBrainResult {
   // record.service.ts/record-capture.service.ts ya se encargaron de
   // crear/actualizar el record correspondiente.
   recordData: Record<string, unknown> | null;
+  recordOutcome: RecordOutcome;
+  // id del record creado/actualizado este turno (null si no hubo ninguno).
+  recordId: string | null;
+  // tenant_id del asistente, para no obligar al llamador a volver a
+  // buscarlo si necesita hacer algo más con el record (ej. estimar tiempo
+  // de espera contando otros pedidos del mismo tenant).
+  tenantId: string;
 }
 
 /**
@@ -135,6 +148,8 @@ export async function runAssistantBrain(params: RunAssistantBrainParams): Promis
   // continuidad) — finalReply es esa versión final, spokenReply/transcript
   // reflejan lo que la IA realmente generó ese turno.
   let finalReply = spokenReply;
+  let recordOutcome: RecordOutcome = null;
+  let recordId: string | null = null;
 
   if (recordData) {
     try {
@@ -142,9 +157,11 @@ export async function runAssistantBrain(params: RunAssistantBrainParams): Promis
         // Ya le habíamos preguntado al contacto en el turno anterior si
         // esto era continuación de un record abierto o uno nuevo.
         if (recordData.is_continuation === true) {
-          await appendRecordData(pendingContinuity.openRecordId, stripControlFields(recordData));
+          const updated = await appendRecordData(pendingContinuity.openRecordId, stripControlFields(recordData));
+          recordOutcome = 'appended';
+          recordId = updated?.id ?? pendingContinuity.openRecordId;
         } else if (recordData.is_continuation === false) {
-          await createRecord({
+          const created = await createRecord({
             tenantId: assistant.tenant_id,
             assistantId: assistant.id,
             interactionId: callId,
@@ -153,11 +170,14 @@ export async function runAssistantBrain(params: RunAssistantBrainParams): Promis
             contactIdentifier,
             data: stripControlFields(recordData)
           });
+          recordOutcome = 'created';
+          recordId = created.id;
         } else {
           // El modelo no aclaró is_continuation pese a la instrucción: no
           // adivinamos, se descarta este intento en vez de crear/actualizar
           // algo incorrecto.
           console.warn('⚠️ Respuesta de continuidad de record sin is_continuation claro, se descarta.');
+          recordOutcome = 'discarded';
         }
         await clearPendingContinuity(sessionId);
       } else {
@@ -176,8 +196,9 @@ export async function runAssistantBrain(params: RunAssistantBrainParams): Promis
             recordData
           });
           finalReply = `${finalReply} ${CONTINUITY_QUESTION}`;
+          recordOutcome = 'pending';
         } else {
-          await createRecord({
+          const created = await createRecord({
             tenantId: assistant.tenant_id,
             assistantId: assistant.id,
             interactionId: callId,
@@ -186,6 +207,8 @@ export async function runAssistantBrain(params: RunAssistantBrainParams): Promis
             contactIdentifier,
             data: stripControlFields(recordData)
           });
+          recordOutcome = 'created';
+          recordId = created.id;
         }
       }
     } catch (recordError) {
@@ -197,5 +220,5 @@ export async function runAssistantBrain(params: RunAssistantBrainParams): Promis
 
   await saveChatHistory(sessionId, message, finalReply);
 
-  return { reply: finalReply, callId, createdAt, recordData };
+  return { reply: finalReply, callId, createdAt, recordData, recordOutcome, recordId, tenantId: assistant.tenant_id };
 }
