@@ -67,6 +67,20 @@ async function bootstrap(): Promise<void> {
   // 2. Ejecutar migraciones automáticas
   await runMigrations(); // <-- 2. EJECUCIÓN ANTES DE ABRIR EL PUERTO
 
+  // Confirma en el log de arranque si las env vars opcionales del canal de
+  // WhatsApp/notificaciones están cargadas, sin imprimir sus valores —
+  // solo para poder verificar un deploy sin adivinar ni exponer secretos.
+  console.log(
+    `📦 DELIVERY_WHATSAPP_NUMBER: ${process.env.DELIVERY_WHATSAPP_NUMBER ? 'configurado' : 'NO configurado'}`
+  );
+  console.log(
+    `📱 WhatsApp (webhook secret / assistant / número permitido): ${
+      process.env.WHATSAPP_WEBHOOK_SECRET && process.env.WHATSAPP_DEV_ASSISTANT_ID && process.env.WHATSAPP_DEV_ALLOWED_NUMBER
+        ? 'configurado'
+        : 'INCOMPLETO'
+    }`
+  );
+
   // 3. Levantar el servidor
   app.listen(PORT, () => {
     console.log('==================================================');
