@@ -109,6 +109,32 @@ export async function runMigrations(): Promise<void> {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- TABLA SUPERADMINS: identidades de plataforma (dueño de VoicePilot AI),
+    -- completamente separada de "users" (usuarios del panel de cliente, que
+    -- siempre pertenecen a un tenant). Un superadmin NO tiene tenant_id — no
+    -- es un concepto multi-tenant, administra a todos los tenants.
+    -- Ver docs/design-voicepilot-admin.md para el razonamiento completo de
+    -- por qué esta separación es a nivel de tabla y no solo un "role".
+    CREATE TABLE IF NOT EXISTS superadmins (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Refresh tokens de superadmin, en tabla propia (no la de "users") para
+    -- que un refresh token de cliente robado no tenga ninguna forma de
+    -- canjearse por una sesión de admin, ni viceversa.
+    CREATE TABLE IF NOT EXISTS superadmin_refresh_tokens (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        superadmin_id UUID REFERENCES superadmins(id) ON DELETE CASCADE,
+        token_hash VARCHAR(64) NOT NULL,
+        expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        revoked_at TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Parche de columnas por si la base de datos existía previa a este cambio
     ALTER TABLE tenants ADD COLUMN IF NOT EXISTS slug VARCHAR(255) UNIQUE;
     ALTER TABLE tenants ADD COLUMN IF NOT EXISTS plan VARCHAR(50) DEFAULT 'basic';
@@ -126,6 +152,12 @@ export async function runMigrations(): Promise<void> {
     -- pedido listo (ver order-notifications.service.ts). Reemplaza el env var
     -- global DELIVERY_WHATSAPP_NUMBER una vez que el panel lo puede editar.
     ALTER TABLE tenants ADD COLUMN IF NOT EXISTS delivery_whatsapp_number VARCHAR(50);
+    -- Fecha límite de una cuenta en account_status='demo', asignada por un
+    -- superadmin desde VoicePilot Admin. NULL = sin vencimiento fijado (el
+    -- comportamiento de hoy). Ver docs/design-voicepilot-admin.md: esta
+    -- versión solo guarda la fecha, no hay ningún enforcement automático
+    -- todavía sobre qué pasa cuando se cumple.
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS demo_expires_at TIMESTAMP WITH TIME ZONE;
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS system_prompt TEXT;
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS greeting_message TEXT;
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS voice_id VARCHAR(100) DEFAULT 'default';
@@ -168,6 +200,8 @@ export async function runMigrations(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id);
     CREATE INDEX IF NOT EXISTS idx_refresh_tokens_hash ON refresh_tokens(token_hash);
+    CREATE INDEX IF NOT EXISTS idx_superadmin_refresh_tokens_admin ON superadmin_refresh_tokens(superadmin_id);
+    CREATE INDEX IF NOT EXISTS idx_superadmin_refresh_tokens_hash ON superadmin_refresh_tokens(token_hash);
     -- Soporta el chequeo de continuidad entre canales: "¿este contacto tiene
     -- un registro abierto reciente?" sin filtrar por channel a propósito, para
     -- que una conversación de voz pueda continuar un registro abierto por
