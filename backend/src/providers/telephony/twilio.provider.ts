@@ -23,11 +23,13 @@ export class TwilioProvider implements TelephonyProvider {
   }
 
   parseSpeechResult(rawBody: any): SpeechResultPayload {
+    const rawConfidence = parseFloat(rawBody.Confidence);
     return {
       from: rawBody.From,
       to: rawBody.To,
       callSid: rawBody.CallSid,
-      speechResult: rawBody.SpeechResult || ''
+      speechResult: rawBody.SpeechResult || '',
+      confidence: Number.isNaN(rawConfidence) ? undefined : rawConfidence
     };
   }
 
