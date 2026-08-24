@@ -46,17 +46,33 @@ export const registerCall = async (req: Request, res: Response): Promise<void> =
 };
 
 /**
- * Obtiene el historial de llamadas de la empresa autenticada. Antes
- * aceptaba cualquier ?tenant_id= de la URL sin verificarlo — hueco de
- * autorización cerrado al forzar el filtro por req.user.tenant_id.
- * Método: GET /api/calls
+ * Obtiene el historial de llamadas de la empresa autenticada, con filtro
+ * opcional de rango de fechas (from/to, sobre created_at). Antes aceptaba
+ * cualquier ?tenant_id= de la URL sin verificarlo — hueco de autorización
+ * cerrado al forzar el filtro por req.user.tenant_id.
+ * Método: GET /api/calls?from=...&to=... (ISO 8601)
  */
 export const getCallLogs = async (req: Request, res: Response): Promise<void> => {
   try {
+    const { from, to } = req.query;
+
+    const conditions: string[] = ['tenant_id = $1'];
+    const params: any[] = [req.user!.tenant_id];
+
+    if (from) {
+      params.push(from);
+      conditions.push(`created_at >= $${params.length}`);
+    }
+
+    if (to) {
+      params.push(to);
+      conditions.push(`created_at <= $${params.length}`);
+    }
+
     // Buscamos las llamadas de esa empresa, ordenadas de la más reciente a la más antigua
     const result = await dbPool.query(
-      `SELECT * FROM calls WHERE tenant_id = $1 ORDER BY created_at DESC`,
-      [req.user!.tenant_id]
+      `SELECT * FROM calls WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC`,
+      params
     );
 
     res.status(200).json({

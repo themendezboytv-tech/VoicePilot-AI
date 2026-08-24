@@ -217,6 +217,105 @@ async function main(): Promise<void> {
     const recordStillReceived = await dbPool.query('SELECT status FROM records WHERE id = $1', [recordBId]);
     assert(recordStillReceived.rows[0].status === 'received', 'El status del record de B no cambió tras el intento cross-tenant de A');
 
+    // --- Filtro de fechas en /api/records: from en el futuro no debe traer nada ---
+    const futureDate = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const recordsFutureFilter = await (await fetch(`${baseUrl}/api/records?from=${encodeURIComponent(futureDate)}`, {
+      headers: { Authorization: `Bearer ${tokenB}` }
+    })).json();
+    assert(recordsFutureFilter.total === 0, `GET /api/records?from=<futuro> no trae records (recibido: ${recordsFutureFilter.total})`);
+
+    // --- POST /api/auth/register: crea tenant + usuario owner, nace en account_status='demo' ---
+    const registerRes = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        business_name: `Negocio Registrado ${runId}`,
+        email: `registrado-${runId}@e2e-test.local`,
+        password: passwordPlain
+      })
+    });
+    const registerBody = await registerRes.json();
+    assert(registerRes.status === 201, `POST /api/auth/register devuelve 201 (recibido: ${registerRes.status}, body: ${JSON.stringify(registerBody)})`);
+    assert(typeof registerBody.accessToken === 'string', 'Register devuelve un accessToken (auto-login)');
+
+    const registeredTenant = await dbPool.query('SELECT account_status FROM tenants WHERE id = $1', [registerBody.user.tenant_id]);
+    assert(registeredTenant.rows[0].account_status === 'demo', `El tenant registrado nace con account_status='demo' (recibido: ${registeredTenant.rows[0].account_status})`);
+
+    // --- Register con email duplicado -> 409, sin crear un tenant huérfano ---
+    const duplicateRegisterRes = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        business_name: `Negocio Duplicado ${runId}`,
+        email: `registrado-${runId}@e2e-test.local`,
+        password: passwordPlain
+      })
+    });
+    assert(duplicateRegisterRes.status === 409, `POST /api/auth/register con email repetido devuelve 409 (recibido: ${duplicateRegisterRes.status})`);
+
+    // --- GET /api/tenants/:id y PATCH: solo sobre el propio tenant ---
+    const getOwnTenantRes = await fetch(`${baseUrl}/api/tenants/${tenantA.tenantId}`, {
+      headers: { Authorization: `Bearer ${tokenA}` }
+    });
+    assert(getOwnTenantRes.status === 200, `GET /api/tenants/:id del propio tenant devuelve 200 (recibido: ${getOwnTenantRes.status})`);
+
+    const getOtherTenantRes = await fetch(`${baseUrl}/api/tenants/${tenantB.tenantId}`, {
+      headers: { Authorization: `Bearer ${tokenA}` }
+    });
+    assert(getOtherTenantRes.status === 404, `GET /api/tenants/:id de otro tenant devuelve 404 (recibido: ${getOtherTenantRes.status})`);
+
+    const patchOwnTenantRes = await fetch(`${baseUrl}/api/tenants/${tenantA.tenantId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+      body: JSON.stringify({ delivery_whatsapp_number: '+593999999999' })
+    });
+    const patchOwnTenantBody = await patchOwnTenantRes.json();
+    assert(patchOwnTenantRes.status === 200, `PATCH /api/tenants/:id del propio tenant devuelve 200 (recibido: ${patchOwnTenantRes.status})`);
+    assert(
+      patchOwnTenantBody.data.delivery_whatsapp_number === '+593999999999',
+      'PATCH /api/tenants/:id actualiza delivery_whatsapp_number'
+    );
+
+    const patchOtherTenantRes = await fetch(`${baseUrl}/api/tenants/${tenantB.tenantId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+      body: JSON.stringify({ name: 'Nombre hackeado' })
+    });
+    assert(patchOtherTenantRes.status === 404, `PATCH /api/tenants/:id de otro tenant devuelve 404 (recibido: ${patchOtherTenantRes.status})`);
+
+    // --- GET /api/assistants/:id y PATCH: solo sobre asistentes del propio tenant ---
+    const getOwnAssistantRes = await fetch(`${baseUrl}/api/assistants/${createdAssistant.data.id}`, {
+      headers: { Authorization: `Bearer ${tokenA}` }
+    });
+    assert(getOwnAssistantRes.status === 200, `GET /api/assistants/:id del propio tenant devuelve 200 (recibido: ${getOwnAssistantRes.status})`);
+
+    const getOtherAssistantRes = await fetch(`${baseUrl}/api/assistants/${createdAssistant.data.id}`, {
+      headers: { Authorization: `Bearer ${tokenB}` }
+    });
+    assert(getOtherAssistantRes.status === 404, `GET /api/assistants/:id desde otro tenant devuelve 404 (recibido: ${getOtherAssistantRes.status})`);
+
+    const patchAssistantRes = await fetch(`${baseUrl}/api/assistants/${createdAssistant.data.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+      body: JSON.stringify({ pricing_info: { pizza_muzzarella: 5000 }, business_hours: { lun_vie: '09:00-18:00' } })
+    });
+    const patchAssistantBody = await patchAssistantRes.json();
+    assert(patchAssistantRes.status === 200, `PATCH /api/assistants/:id del propio tenant devuelve 200 (recibido: ${patchAssistantRes.status})`);
+    assert(
+      patchAssistantBody.data.pricing_info.pizza_muzzarella === 5000,
+      'PATCH /api/assistants/:id guarda pricing_info como JSONB'
+    );
+
+    const patchAssistantFromOtherTenantRes = await fetch(`${baseUrl}/api/assistants/${createdAssistant.data.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenB}` },
+      body: JSON.stringify({ name: 'Robado' })
+    });
+    assert(
+      patchAssistantFromOtherTenantRes.status === 404,
+      `PATCH /api/assistants/:id desde otro tenant devuelve 404 (recibido: ${patchAssistantFromOtherTenantRes.status})`
+    );
+
     // --- Refresh: rota el token, el viejo queda inservible ---
     const refreshRes = await fetch(`${baseUrl}/api/auth/refresh`, {
       method: 'POST',

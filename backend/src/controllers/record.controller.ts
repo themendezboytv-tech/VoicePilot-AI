@@ -92,14 +92,16 @@ export const createRecord = async (req: Request, res: Response): Promise<void> =
 
 /**
  * Lista los records de la empresa autenticada, con filtros opcionales por
- * status, channel y record_type. Antes aceptaba cualquier ?tenant_id= de la
- * URL sin verificar que fuera del que hace la request — hueco de
- * autorización cerrado al forzar el filtro por req.user.tenant_id.
- * Método: GET /api/records?status=...&channel=...&record_type=...
+ * status, channel, record_type y rango de fechas (from/to, sobre
+ * created_at). Antes aceptaba cualquier ?tenant_id= de la URL sin verificar
+ * que fuera del que hace la request — hueco de autorización cerrado al
+ * forzar el filtro por req.user.tenant_id.
+ * Método: GET /api/records?status=...&channel=...&record_type=...&from=...&to=...
+ * (from/to en formato ISO 8601, ej. 2026-08-01 o 2026-08-01T00:00:00Z)
  */
 export const getRecords = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { status, channel, record_type } = req.query;
+    const { status, channel, record_type, from, to } = req.query;
 
     // Arma el WHERE dinámicamente según los filtros opcionales presentes,
     // manteniendo todo parametrizado.
@@ -119,6 +121,16 @@ export const getRecords = async (req: Request, res: Response): Promise<void> => 
     if (record_type) {
       params.push(record_type);
       conditions.push(`record_type = $${params.length}`);
+    }
+
+    if (from) {
+      params.push(from);
+      conditions.push(`created_at >= $${params.length}`);
+    }
+
+    if (to) {
+      params.push(to);
+      conditions.push(`created_at <= $${params.length}`);
     }
 
     const result = await dbPool.query(

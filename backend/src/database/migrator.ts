@@ -116,6 +116,16 @@ export async function runMigrations(): Promise<void> {
     -- Vertical de negocio del tenant (restaurant, barbershop, ...). Solo
     -- metadata para reportes/onboarding por ahora, no bifurca ningún código.
     ALTER TABLE tenants ADD COLUMN IF NOT EXISTS business_type VARCHAR(50);
+    -- Estado de la cuenta para el registro público (POST /api/auth/register):
+    -- toda cuenta nueva nace en 'demo'. Por ahora es solo informativo/visible
+    -- en la tabla — no bloquea ninguna funcionalidad todavía; el día que
+    -- exista "VoicePilot Admin" para aprobar cuentas manualmente, ahí se
+    -- decide qué gatear según este valor (ver CLAUDE.md).
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS account_status VARCHAR(20) NOT NULL DEFAULT 'demo';
+    -- Contacto de WhatsApp del repartidor/staff que recibe la notificación de
+    -- pedido listo (ver order-notifications.service.ts). Reemplaza el env var
+    -- global DELIVERY_WHATSAPP_NUMBER una vez que el panel lo puede editar.
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS delivery_whatsapp_number VARCHAR(50);
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS system_prompt TEXT;
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS greeting_message TEXT;
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS voice_id VARCHAR(100) DEFAULT 'default';
@@ -124,6 +134,12 @@ export async function runMigrations(): Promise<void> {
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS telephony_provider VARCHAR(50) DEFAULT 'twilio';
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS captures_records BOOLEAN DEFAULT false;
     ALTER TABLE assistants ADD COLUMN IF NOT EXISTS default_record_type VARCHAR(50) DEFAULT 'order';
+    -- Precios/servicios y horarios de atención, editables desde la página
+    -- "Configuración del asistente" del panel. Formato libre (JSONB) porque
+    -- varía por vertical de negocio (menú de restaurante vs. servicios de
+    -- peluquería vs. ...) — mismo criterio que records.data.
+    ALTER TABLE assistants ADD COLUMN IF NOT EXISTS pricing_info JSONB DEFAULT '{}';
+    ALTER TABLE assistants ADD COLUMN IF NOT EXISTS business_hours JSONB DEFAULT '{}';
     ALTER TABLE calls ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE;
     ALTER TABLE calls ADD COLUMN IF NOT EXISTS caller_number VARCHAR(50);
     ALTER TABLE calls ADD COLUMN IF NOT EXISTS call_sid VARCHAR(64);
