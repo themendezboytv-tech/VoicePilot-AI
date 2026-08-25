@@ -325,6 +325,17 @@ export const handleSpeechResult = async (req: Request, res: Response): Promise<v
       }
     }
 
+    // El transcript ya guardado en la fila de `calls` (arriba) se computó
+    // ANTES de este bloque, así que si acá se le agregó CONTINUITY_QUESTION
+    // a spokenReply, el registro había quedado desactualizado respecto de lo
+    // que el cliente escuchó de verdad. Se refresca acá en vez de reordenar
+    // todo el flujo, ya que el insert original tiene que ir antes para poder
+    // usar callRowId como interactionId al crear un record.
+    const finalTranscript = `Cliente: ${speech.speechResult} - Asistente: ${spokenReply}`;
+    if (finalTranscript !== transcript) {
+      await dbPool.query('UPDATE calls SET transcript = $1 WHERE id = $2', [finalTranscript, callRowId]);
+    }
+
     await saveChatHistory(sessionId, speech.speechResult, spokenReply);
 
     const nextGatherUrl = `${baseGatherPath}&turn=${turn + 1}&call_started_at=${callStartedAt}`;
